@@ -86,4 +86,26 @@ out=$(check_py) || { echo "FAIL capi route check:"; echo "$out"; exit 1; }
 n=$out
 
 if [ "$fail" = 1 ]; then exit 1; fi
+
+# 3. companion-wait references: the script must exist, be executable and pass
+#    the shellcheck linter whenever a skill doc tells the companion to run it.
+wait_refs=0
+for f in $(grep -rl 'companion-wait' skills/ 2>/dev/null || true); do
+  wait_refs=1
+done
+if [ "$wait_refs" = 1 ]; then
+  if [ ! -x scripts/companion-wait ]; then
+    echo "FAIL: a skill references companion-wait but scripts/companion-wait is missing or not executable"
+    exit 1
+  fi
+  if ! shellcheck scripts/companion-wait; then
+    echo "FAIL companion-wait: shellcheck"
+    exit 1
+  fi
+  if [ ! -x scripts/test-companion-wait.sh ]; then
+    echo "FAIL: scripts/test-companion-wait.sh missing or not executable"
+    exit 1
+  fi
+fi
+
 echo "skills: OK ($n capi calls checked)"

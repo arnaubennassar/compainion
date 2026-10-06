@@ -17,24 +17,23 @@ make build && ./bin/companiond          # or: go run ./cmd/companiond
 
 # 2. One-time user setup (secrets are user-only, never agent-written):
 #    hermes profile create companion
-#    hermes -p companion gateway setup    # Telegram token, webhook + API server keys
+#    hermes -p companion gateway setup    # Telegram token + API server key
 
-# 3. Wire the gateway: skills dirs, webhook toolsets, 'companion-wake' route,
-#    companiond subscription (idempotent; --dry-run previews every command)
+# 3. Wire the gateway: skills dirs on BOTH the companion and default profile
+#    (idempotent; --dry-run previews every command)
 scripts/hermes/install.sh
 
-# 4. Start the companion gateway and message your bot on Telegram
+# 4. Start the companion gateway, open the Telegram chat and say 'start'
 hermes -p companion gateway run
 ```
 
-The wake-up path: companiond webhook subscription → Hermes route
-`companion-wake` (`/p/companion/webhooks/companion-wake`, delivers to Telegram,
-mirrors to the chat session) → the companion runs
-`GET /interruptions/next` and presents one interruption → your reply is
-reconciled against `GET /interruptions?status=presented`. Requires the repo
-skills dir registered on both profiles and `terminal file skills delegation`
-toolsets enabled on the companion profile's webhook platform (`install.sh`
-does both).
+The companion is session-driven: no webhooks. It presents one interruption at
+a time (`GET /interruptions/next`), your reply is reconciled against
+`GET /interruptions?status=presented`, and when the queue is clear it blocks in
+`scripts/companion-wait --max 240` (override with `COMPANION_WAIT_MAX`) until
+an interruption or wake-worthy event arrives. Requires the repo skills dir
+registered on both profiles (`install.sh` does that). To clean up a
+previously installed webhook wake-up path: `scripts/hermes/install.sh --uninstall-wake`.
 
 Worker lifecycle (spawn / status / resume / output) goes through
 `scripts/hermes/runs.sh`; workers run on the companion profile with per-role
@@ -53,6 +52,8 @@ internal/domain|store|api|events|notify|ids|config|testutil
 skills/companion/           companion skill + harness doc (harnesses/hermes.md)
 skills/create-plan|execute-plan|execute-task/   worker skills
 scripts/capi                curl+jq REST client used by all skills
+scripts/companion-wait      blocking idle wait (prints {"wake":...} JSON)
+scripts/test-companion-wait.sh  black-box tests (throwaway daemon on :7791)
 scripts/hermes/runs.sh      gateway Runs API helper (spawn/status/resume/output;
                             companion profile: /p/companion)
 scripts/hermes/install.sh   gateway wiring (idempotent, --dry-run)

@@ -131,32 +131,30 @@ inside the repo, do all work in that directory, and report its path and branch.
 
 The companion/orchestrator merges or reviews the branch afterwards.
 
-## Wake-up flow (Telegram)
+## How the companion is woken (session-driven, no webhooks)
 
-1. companiond emits `interruption_created` / `agent_waiting` / `agent_lost`
-   notes; its webhook subscription (registered by `scripts/hermes/install.sh`)
-   POSTs to `http://127.0.0.1:8644/p/companion/webhooks/companion-wake`
-   signed with the route's secret (`X-Webhook-Signature-V2` + `X-Webhook-Timestamp`).
-2. The Hermes route `companion-wake` (profile `companion`) runs the companion
-   agent with a fixed prompt: load the `companion` skill, set
-   `COMPANION_HOME` + `COMPANIOND_URL`, run `scripts/capi GET
-   /interruptions/next` and present the next interruption (route prompts are
-   static strings, so `install.sh` bakes in the absolute repo path). The reply
-   is delivered to Telegram (`--mirror-to-session` also writes it into the
-   chat session so replies there have context).
-3. REQUIREMENT (live-verified): the companion profile's `webhook` platform
-   needs the `terminal`, `file`, `skills` and `delegation` toolsets enabled,
-   or the wake-up agent has no terminal tool and answers with an apology
-   instead of running capi. `install.sh` step 2b runs:
-   `hermes -p companion tools enable terminal file skills delegation --platform webhook`.
-   The repo skills dir must also be registered as `skills.external_dirs` on
-   BOTH the companion profile (for the profile CLI/agent) and the default
-   profile (the shared webhook platform resolves route `--skills` there).
-3. The notification is a SIGNAL only: the companion calls
-   `capi GET /interruptions/next` itself and presents per the Telegram rules.
-4. The user replies in Telegram. The companion reconciles via
-   `capi GET "/interruptions?status=presented"` — the API is the source of
-   truth, not chat history.
+The companion has NO webhook wake-up path any more (it was removed: see
+"Live acceptance - Session-driven loop" in docs/live-acceptance.md). Signals
+reach it in exactly two ways:
+
+1. The user messages the companion (Telegram chat with the Hermes profile
+   `companion`, or a CLI session) - this starts/continues a turn.
+2. Its own blocking wait returns: the companion runs the single terminal call
+   `scripts/companion-wait --max 240` (override with `COMPANION_WAIT_MAX`)
+   when nothing is pending, and the script's one-line JSON output
+   (`{"wake":"interruption",...}` / `{"wake":"events","events":[...]}` /
+   `{"wake":"timeout"}`) is the signal. A user message arriving during the wait
+   interrupts it and takes priority.
+
+Per-turn contract: a reply only reaches the user when the turn ends, so the
+loop is pull next -> present -> END THE TURN; the user answers in the next
+turn, where the companion reconciles via
+`capi GET "/interruptions?status=presented"` — the API is the source of
+truth, not chat history.
+
+Liveness sweep, auto-steer and findings surfacing run on each loop iteration
+and on every `events` wake. Context may be cleared at any time: everything
+reconciles from the API on the next turn.
 
 Telegram presentation rules: short messages, digest line first, ONE question
 at a time (same-`group` questions together; same-`topic` batch presented after),

@@ -1,7 +1,7 @@
 ---
 name: companion
 description: Use when acting as the CompAInion companion profile - you serve the user over Telegram, dispatch work to Hermes workers/orchestrators through the CompAInion API, and present one interruption at a time.
-version: 1.0.0
+version: 1.1.0
 metadata:
   hermes:
     tags: [compainion, companion, orchestration, telegram]
@@ -36,7 +36,8 @@ your context. Context may be cleared at any moment - nothing may live only in co
    create one: `capi POST /workstreams '{"title":"<title>","priority":1}'`.
    Remember the `workstream_id` by re-reading it from the API; it is the parent of
    everything you do.
-3. Heartbeat each loop turn: `capi POST /agents/<your-id>/heartbeat`.
+3. Heartbeat on the first turn of a session and every ~10 minutes while
+   looping: `capi POST /agents/<your-id>/heartbeat`.
 
 ## Dispatch rules
 
@@ -61,18 +62,27 @@ Inside the companion you may use the `delegate_task` tool for such read-only
 digests when the harness lacks spawn; delegate_task children cannot ask the user
 or spawn further agents - give them everything in the prompt.
 
-## Main loop (Telegram)
+## Main loop (session-driven)
 
-Run this every time you wake (Telegram message, webhook wake-up with text
-"reconcile: present the next interruption", or the end of any turn):
+There are NO webhook wake-ups. Signals reach you in only two ways: the user
+messages you (Telegram chat or CLI session), or your own blocking wait
+(`companion-wait`) returns. A reply only reaches the user when the turn ENDS -
+so the loop is: pull next -> present it -> end the turn; the user answers in
+the next turn.
 
-1. **Reconcile first.** Chat history is NOT the source of truth. On any user
+Run this on every turn start:
+
+1. **Register/heartbeat** (only on the first turn of a session or after a
+   context clear): register yourself per **Startup** (idempotent) and
+   `capi POST /agents/<your-id>/heartbeat`.
+2. **Reconcile first.** Chat history is NOT the source of truth. On any user
    reply, before interpreting it, call
    `capi GET "/interruptions?status=presented"` - those are what you last showed.
-   Match the user's reply to them by position/content; if nothing matches, ask.
-2. **Fetch the next interruption:** `capi GET /interruptions/next` (204 ->
-   reply "nothing pending" briefly and handle liveness/surfacing below).
-3. **Present.** Telegram rules:
+   Match the user's reply to them by position/content and record the answers.
+   If the reply matches nothing, ask which interruption it belongs to.
+3. **Fetch the next interruption:** `capi GET /interruptions/next`
+   (marks it `presented`; 204 -> nothing pending, go to **Idle**).
+4. **Present.** Telegram rules:
    - Short messages. Digest line first (the interruption's `digest`), then the
      current question only.
    - ONE question at a time, in `position` order. Questions sharing the same
@@ -84,9 +94,36 @@ Run this every time you wake (Telegram message, webhook wake-up with text
      `1) Approve (recommended)\n2) Revise first`. Say which is recommended.
    - Accepted replies: `1` (pick suggestion), `1 + comment`
      (suggestion_with_comment), free text (mode `free`), `details` (see below).
-4. **Record the answer**, then loop back to step 1 (the next question of the same
+5. **Record the answer**, then loop back to step 2 (the next question of the same
    interruption comes via `capi GET /interruptions/$ID` - keep presenting until
    every question is answered/skipped).
+6. **End the turn** after presenting (or after recording an answer and pulling
+   the next one). Never try to keep a conversation going inside one turn.
+
+## Idle: the blocking wait
+
+When step 3 returns 204 (queue clear), run the blocking wait as ONE terminal
+call with the LITERAL absolute path and a max that survives the terminal tool
+timeout:
+
+    scripts/companion-wait --max 240
+
+(Use `COMPANION_WAIT_MAX` from the environment as the `--max` value when set;
+the tool's own timeout must exceed it.) It prints one line of JSON:
+`{"wake":"interruption",...}`, `{"wake":"events","events":[...]}` or
+`{"wake":"timeout"}`.
+
+- `interruption`: present it (step 4) and end the turn.
+- `events`: run the **Liveness sweep**, **Auto-steer** and **Surfacing
+  findings** for the woken events. If any of them needs a user decision, create
+  an interruption and present it (step 4); otherwise end the turn with a
+  one-line status. Advance nothing else - the cursor is managed by the script.
+- `timeout`: if the queue has been empty for ~3 consecutive waits, end the turn
+  with exactly one line: `Queue clear - message me when you want something.`
+  Otherwise run the wait again.
+
+A user message that arrives while you wait interrupts the wait and takes
+priority: reconcile presented interruptions (step 2) before anything else.
 
 Answering:
 `capi POST /interruptions/$ID/answers '{"question_id":"$Q","author":"user","mode":"suggestion","suggestion_id":"$S","final":true}'`
@@ -109,7 +146,7 @@ steer new scope. Always record it:
 `capi POST /agents/$ID/events '{"type":"steer","payload":{"text":"continue","reason":"unblocked, not polling"}}'`
 Delivery/steering mechanics are in `harnesses/hermes.md` (`resume`).
 
-**Surfacing findings**: every loop turn check `capi GET "/findings?status=new"`.
+**Surfacing findings**: each loop turn and each `events` wake check `capi GET "/findings?status=new"`.
 At a natural break (between interruptions), batch them into ONE interruption:
 `capi POST /interruptions '{"topic":"findings","kind":"finding","priority":"low","digest":"N new findings from workers","blocking":false,"questions":[{"position":1,"text":"What should we do with these findings?","answer_type":"choice","suggestions":[{"label":"Open issues","rationale":"...","recommended":true},{"label":"Add a step"},{"label":"Ignore"}]}]}'`
 (recommended = `issue_opened` for low/medium severity). After the answer call
@@ -119,7 +156,8 @@ per finding; for "open issue" spawn a worker to create it and use its URL as
 `capi GET "/findings?query=<term>"` for near-duplicates. Link the interruption via
 `capi POST /findings/$FID/surface '{"interruption_id":"$IID"}'`.
 
-**Liveness sweep**: every loop turn and on any `agent_lost` signal: for each agent
+**Liveness sweep**: each loop turn and on any `agent_lost` signal (including
+`agent_lost` notes in an `events` wake): for each agent
 in `running|waiting` (`capi GET "/agents?status=running"` etc.) check the run via
 `scripts/hermes/runs.sh status` (see `harnesses/hermes.md`). A run failed/unknown
 after a gateway restart -> `capi PATCH /agents/$ID '{"status":"lost"}'`. If it
@@ -131,7 +169,7 @@ respawn-and-retry (recommended) / mark failed / cancel, and act on the answer
 
 Your context can be cleared at any time. Everything durable is in the API: plans,
 steps, tasks, interruptions, findings, events. After closing an interruption you
-may end the turn; the next wake-up reconciles from `GET /interruptions/next` and
+may end the turn; the next turn reconciles from `GET /interruptions/next` and
 `GET /interruptions?status=presented`. Never keep decisions, ids-to-remember, or
 plans in context only - if it matters, it has a row.
 
@@ -162,6 +200,9 @@ capi GET "/findings?query=logs"
 capi POST /findings/$FINDING_ID/resolve '{"resolution":"issue_opened","resolution_ref":"https://..."}'
 capi POST /findings/$FINDING_ID/surface '{"interruption_id":"$INTERRUPTION_ID"}'
 capi GET /events?since=$EVENT_ID&limit=100
+# Idle wait (one terminal call; COMPANION_WAIT_MAX overrides --max):
+#   scripts/companion-wait --max 240
+#   -> {"wake":"interruption",...} | {"wake":"events","events":[...]} | {"wake":"timeout"}
 # Worker lifecycle (see harnesses/hermes.md; role is inferred from skills):
 #   scripts/hermes/runs.sh spawn <name> <skills-csv> <prompt-file> [--role R]
 #   scripts/hermes/runs.sh status <run_id>
