@@ -16,7 +16,7 @@ restrictible via config:
 
 ```
 hermes config set platforms.webhook.host 127.0.0.1
-# -> ✓ Set platforms.webhook.host = 127.0.0.1 in /home/brolygon/.hermes/config.yaml
+# -> ✓ Set platforms.webhook.host = 127.0.0.1 in ~/.hermes/config.yaml
 ```
 
 Requires a gateway restart to take effect (`hermes gateway restart`):

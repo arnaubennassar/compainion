@@ -8,7 +8,7 @@ Ship a Go REST backend (`companiond`, OpenAPI-documented, SQLite) plus a set of 
 
 ## Current context / assumptions
 
-- Repo `/home/brolygon/repos/arnaubennassar/compainion` holds only `README.md` (12 bytes) and one commit. Greenfield. (Note the directory is spelled `compainion`; the product is "CompAInion"; Go module name: `github.com/arnaubennassar/compainion`. Confirm the real remote with `git remote -v`; if none, keep this name.)
+- Repo `$COMPANION_HOME` (i.e. `<home-dir>/repos/arnaubennassar/compainion`) holds only `README.md` (12 bytes) and one commit. Greenfield. (Note the directory is spelled `compainion`; the product is "CompAInion"; Go module name: `github.com/arnaubennassar/compainion`. Confirm the real remote with `git remote -v`; if none, keep this name.)
 - Toolchain on the box: Go 1.25.11, tmux, curl, jq, hermes (`~/.local/bin/hermes`). NO `sqlite3` CLI -> use a pure-Go driver (`modernc.org/sqlite`, no cgo) and verify DB state through the API or Go tests.
 - Hermes facts verified locally (`hermes chat --help`):
   - `hermes chat -q "<text>" --oneshot -Q` answers and exits (non-interactive worker). `--query-file PATH` is safe for arbitrary text (use it for step payloads, never shell-interpolate).
@@ -70,7 +70,7 @@ Conventions for ALL code tasks:
 Files: `go.mod`, `Makefile`, `.gitignore`.
 
 ```bash
-cd /home/brolygon/repos/arnaubennassar/compainion
+cd "$COMPANION_HOME"
 go mod init github.com/arnaubennassar/compainion
 go get modernc.org/sqlite@latest github.com/oklog/ulid/v2@latest github.com/getkin/kin-openapi@latest gopkg.in/yaml.v3@latest
 ```
