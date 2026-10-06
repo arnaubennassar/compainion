@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"strconv"
 	"sync"
 	"time"
 
@@ -46,6 +47,7 @@ type Dispatcher struct {
 	Client *http.Client
 	Sleep  func(time.Duration)
 	Logger *slog.Logger
+	Clock  func() time.Time // injectable for tests; used for webhook signatures
 
 	once    sync.Once
 	started chan struct{} // closed after the boot cursor is read (test sync)
@@ -97,6 +99,9 @@ func (d *Dispatcher) init() {
 		}
 		if d.Logger == nil {
 			d.Logger = slog.Default()
+		}
+		if d.Clock == nil {
+			d.Clock = time.Now
 		}
 	})
 }
@@ -167,19 +172,28 @@ func matchesSubscription(sub store.Subscription, ev store.Event) bool {
 	return true
 }
 
-// signal is the payload delivered to hooks: type and id only, never the event
-// payload.
+// signal is the payload delivered to hooks: type, id and event_type only,
+// never the event payload. Hermes reads the event type from `event_type`.
 type signal struct {
-	Type string `json:"type"`
-	ID   string `json:"id"`
+	Type      string `json:"type"`
+	ID        string `json:"id"`
+	EventType string `json:"event_type"`
 }
 
-// deliverWebhook POSTs the signal JSON to the target, signing with
-// X-Companion-Signature = hex HMAC-SHA256(body, secret) when a secret is set.
+// deliverWebhook POSTs the signal JSON to the target. When a secret is set it
+// sends, for Hermes-compatible webhook routes:
+//
+//	X-Webhook-Timestamp: unix seconds (from the injectable clock)
+//	X-Webhook-Signature-V2: hex HMAC-SHA256("<ts>.<body>", secret)
+//
+// and keeps the legacy header for non-Hermes consumers:
+//
+//	X-Companion-Signature: hex HMAC-SHA256(body, secret)
+//
 // Retries up to webhookAttempts total attempts with webhookBackoff pauses on
 // transport errors and non-2xx responses.
 func (d *Dispatcher) deliverWebhook(ctx context.Context, sub store.Subscription, ev store.Event) {
-	body, _ := json.Marshal(signal{Type: ev.Type, ID: ev.ID})
+	body, _ := json.Marshal(signal{Type: ev.Type, ID: ev.ID, EventType: ev.Type})
 	for attempt := 1; attempt <= webhookAttempts; attempt++ {
 		rctx, cancel := context.WithTimeout(ctx, requestTimeout)
 		req, err := http.NewRequestWithContext(rctx, http.MethodPost, sub.Target, bytes.NewReader(body))
@@ -193,6 +207,12 @@ func (d *Dispatcher) deliverWebhook(ctx context.Context, sub store.Subscription,
 			mac := hmac.New(sha256.New, []byte(*sub.Secret))
 			mac.Write(body)
 			req.Header.Set("X-Companion-Signature", hex.EncodeToString(mac.Sum(nil)))
+			ts := d.Clock().Unix()
+			v2mac := hmac.New(sha256.New, []byte(*sub.Secret))
+			fmt.Fprintf(v2mac, "%d.", ts)
+			v2mac.Write(body)
+			req.Header.Set("X-Webhook-Timestamp", strconv.FormatInt(ts, 10))
+			req.Header.Set("X-Webhook-Signature-V2", hex.EncodeToString(v2mac.Sum(nil)))
 		}
 		resp, err := d.Client.Do(req)
 		if err == nil {

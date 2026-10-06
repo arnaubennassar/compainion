@@ -1724,8 +1724,10 @@ components:
         secret:
           type: string
           nullable: true
-          description: When set, webhooks carry X-Companion-Signature (hex
-            HMAC-SHA256 of the body).
+          description: When set, webhooks carry X-Webhook-Timestamp (unix seconds)
+            and X-Webhook-Signature-V2 (hex HMAC-SHA256 of "<timestamp>.<body>"),
+            compatible with Hermes webhook routes; the legacy X-Companion-Signature
+            header (hex HMAC-SHA256 of the body) is also sent.
         active: { type: boolean }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }

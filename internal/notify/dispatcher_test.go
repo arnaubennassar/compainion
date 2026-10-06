@@ -34,7 +34,8 @@ func runDispatcher(t *testing.T, db *store.DB, client *http.Client, sleep func(t
 	if sleep == nil {
 		sleep = func(time.Duration) {}
 	}
-	d := &Dispatcher{DB: db, Client: client, Sleep: sleep, Logger: slog.Default(), started: make(chan struct{})}
+	d := &Dispatcher{DB: db, Client: client, Sleep: sleep, Logger: slog.Default(), started: make(chan struct{}),
+		Clock: func() time.Time { return time.Unix(1700000000, 0) }}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
@@ -56,12 +57,14 @@ func runDispatcher(t *testing.T, db *store.DB, client *http.Client, sleep func(t
 func TestWebhookDelivered(t *testing.T) {
 	db := newTestDB(t)
 	var calls int32
-	var body, sig string
+	var body, sig, v2sig, ts string
 	hook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt32(&calls, 1)
 		b, _ := io.ReadAll(r.Body)
 		body = string(b)
 		sig = r.Header.Get("X-Companion-Signature")
+		v2sig = r.Header.Get("X-Webhook-Signature-V2")
+		ts = r.Header.Get("X-Webhook-Timestamp")
 		w.WriteHeader(200)
 	}))
 	defer hook.Close()
@@ -86,14 +89,22 @@ func TestWebhookDelivered(t *testing.T) {
 	if got := atomic.LoadInt32(&calls); got != 1 {
 		t.Fatalf("webhook calls = %d, want 1", got)
 	}
-	wantBody := fmt.Sprintf(`{"type":"needs_input","id":%q}`, ev.ID)
+	wantBody := fmt.Sprintf(`{"type":"needs_input","id":%q,"event_type":"needs_input"}`, ev.ID)
 	if body != wantBody {
 		t.Errorf("body = %q, want %q", body, wantBody)
+	}
+	if want := "1700000000"; ts != want {
+		t.Errorf("X-Webhook-Timestamp = %q, want %q", ts, want)
 	}
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write([]byte(body))
 	if want := hex.EncodeToString(mac.Sum(nil)); sig != want {
-		t.Errorf("signature = %q, want %q", sig, want)
+		t.Errorf("X-Companion-Signature = %q, want %q", sig, want)
+	}
+	v2mac := hmac.New(sha256.New, []byte(secret))
+	v2mac.Write([]byte("1700000000." + body))
+	if want := hex.EncodeToString(v2mac.Sum(nil)); v2sig != want {
+		t.Errorf("X-Webhook-Signature-V2 = %q, want %q", v2sig, want)
 	}
 }
 
@@ -196,7 +207,7 @@ func TestFilterKind(t *testing.T) {
 	if got := atomic.LoadInt32(&calls); got != 1 {
 		t.Fatalf("calls = %d, want 1 after matching filter", got)
 	}
-	want := fmt.Sprintf(`{"type":"note","id":%q}`, ev.ID)
+	want := fmt.Sprintf(`{"type":"note","id":%q,"event_type":"note"}`, ev.ID)
 	if lastBody != want {
 		t.Errorf("body = %q, want %q", lastBody, want)
 	}
