@@ -174,7 +174,7 @@ func TestAddRemoveDepRules(t *testing.T) {
 	sc, _ := db.CreateStep(ctx, Step{PlanID: p.ID, Kind: "task", Title: "C", AddedBy: "planner", Deps: []string{sb.ID}})
 
 	// C -> A ok
-	if err := db.AddDep(ctx, sc.ID, sa.ID); err != nil {
+	if err := db.AddDep(ctx, sc.ID, sa.ID, 1); err != nil {
 		t.Fatalf("AddDep = %v", err)
 	}
 	sd, _ := db.GetStep(ctx, sc.ID)
@@ -182,7 +182,7 @@ func TestAddRemoveDepRules(t *testing.T) {
 		t.Errorf("C deps = %v", sd.Deps)
 	}
 	// cycle: A -> C (A depends on C) when C already depends on A
-	if err := db.AddDep(ctx, sa.ID, sc.ID); err == nil {
+	if err := db.AddDep(ctx, sa.ID, sc.ID, 1); err == nil {
 		t.Error("cycle must be 409")
 	} else if de, ok := err.(*domain.Error); !ok || de.Kind != domain.Conflict {
 		t.Errorf("kind = %v", err)
@@ -190,15 +190,15 @@ func TestAddRemoveDepRules(t *testing.T) {
 	// cross-plan dep
 	p2, _ := seedStepPlan(t, db)
 	s2, _ := db.CreateStep(ctx, stepIn(p2, "X"))
-	if err := db.AddDep(ctx, sb.ID, s2.ID); err == nil {
+	if err := db.AddDep(ctx, sb.ID, s2.ID, 1); err == nil {
 		t.Error("cross-plan dep must fail")
 	}
 	// goal never gains deps via AddDep
-	if err := db.AddDep(ctx, *p.GoalStepID, sa.ID); err == nil {
+	if err := db.AddDep(ctx, *p.GoalStepID, sa.ID, 1); err == nil {
 		t.Error("AddDep on goal must fail")
 	}
 	// remove
-	if err := db.RemoveDep(ctx, sc.ID, sa.ID); err != nil {
+	if err := db.RemoveDep(ctx, sc.ID, sa.ID, 1); err != nil {
 		t.Fatalf("RemoveDep = %v", err)
 	}
 	sd, _ = db.GetStep(ctx, sc.ID)
@@ -206,7 +206,7 @@ func TestAddRemoveDepRules(t *testing.T) {
 		t.Errorf("C deps after remove = %v", sd.Deps)
 	}
 	// goal deps are not removable via RemoveDep
-	if err := db.RemoveDep(ctx, *p.GoalStepID, sb.ID); err == nil {
+	if err := db.RemoveDep(ctx, *p.GoalStepID, sb.ID, 1); err == nil {
 		t.Error("RemoveDep on goal must fail")
 	}
 }

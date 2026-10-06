@@ -442,20 +442,24 @@ func requirePlanApprovalRef(ctx context.Context, d *DB, planID, approvalRef stri
 
 // AddDep adds a dependency edge. Same editing rule as UpdateStep (pending
 // only); goal steps never gain deps this way (leaf recomputation owns the
-// goal's edges); cycles -> Conflict.
-func (d *DB) AddDep(ctx context.Context, stepID, dependsOn string) error {
-	return d.editDep(ctx, stepID, dependsOn, true)
+// goal's edges); cycles and duplicate edges are Conflicts; a stale
+// expectedVersion is a PreconditionFailed (412).
+func (d *DB) AddDep(ctx context.Context, stepID, dependsOn string, expectedVersion int) error {
+	return d.editDep(ctx, stepID, dependsOn, expectedVersion, true)
 }
 
 // RemoveDep deletes a dependency edge (same rules as AddDep).
-func (d *DB) RemoveDep(ctx context.Context, stepID, dependsOn string) error {
-	return d.editDep(ctx, stepID, dependsOn, false)
+func (d *DB) RemoveDep(ctx context.Context, stepID, dependsOn string, expectedVersion int) error {
+	return d.editDep(ctx, stepID, dependsOn, expectedVersion, false)
 }
 
-func (d *DB) editDep(ctx context.Context, stepID, dependsOn string, add bool) error {
+func (d *DB) editDep(ctx context.Context, stepID, dependsOn string, expectedVersion int, add bool) error {
 	s, err := d.GetStep(ctx, stepID)
 	if err != nil {
 		return err
+	}
+	if s.Version != expectedVersion {
+		return domain.Errf(domain.PreconditionFailed, "step %s version %d != expected %d", stepID, s.Version, expectedVersion)
 	}
 	if s.Kind == "goal" {
 		return domain.Errf(domain.Conflict, "goal dependencies are managed by the store (leaf feeding), not editable")
@@ -471,6 +475,11 @@ func (d *DB) editDep(ctx context.Context, stepID, dependsOn string, add bool) er
 		return domain.Errf(domain.Invalid, "depends_on %s belongs to another plan", dependsOn)
 	}
 	if add {
+		for _, existing := range s.Deps {
+			if existing == dependsOn {
+				return domain.Errf(domain.Conflict, "step %s already depends on %s", stepID, dependsOn)
+			}
+		}
 		deps, err := d.loadDeps(ctx, s.PlanID)
 		if err != nil {
 			return err
@@ -545,6 +554,9 @@ func (d *DB) DeleteStep(ctx context.Context, id, approvalRef string) error {
 
 // NextSteps returns the ready (claimable) steps of a plan.
 func (d *DB) NextSteps(ctx context.Context, planID string) ([]Step, error) {
+	if _, err := d.GetPlan(ctx, planID); err != nil {
+		return nil, err
+	}
 	all, err := d.listSteps(ctx, StepFilter{PlanID: planID})
 	if err != nil {
 		return nil, err

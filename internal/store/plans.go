@@ -68,6 +68,13 @@ func (d *DB) CreatePlan(ctx context.Context, p Plan) (Plan, error) {
 	p.Version = 1
 	n := now()
 	p.CreatedAt, p.UpdatedAt = n, n
+	// creator may be a plain user; only reference a real agent in the event.
+	agent := p.CreatorAgentID
+	if agent != "" {
+		if _, err := d.GetAgent(ctx, agent); err != nil {
+			agent = ""
+		}
+	}
 	goal := Step{
 		PlanID: p.ID, Kind: "goal", Title: "Goal",
 		AcceptanceCriteria: p.AcceptanceCriteria, Scope: p.Scope,
@@ -87,7 +94,7 @@ func (d *DB) CreatePlan(ctx context.Context, p Plan) (Plan, error) {
 		if err := insertStepTx(tx, goal, nil); err != nil {
 			return err
 		}
-		_, err = AppendEventTx(tx, Event{AgentID: p.CreatorAgentID, PlanID: p.ID, Type: "note",
+		_, err = AppendEventTx(tx, Event{AgentID: agent, PlanID: p.ID, Type: "note",
 			Payload: mustJSON(map[string]any{"kind": "plan_created", "goal_step_id": goal.ID})})
 		return err
 	})
@@ -167,7 +174,7 @@ func (d *DB) UpdatePlan(ctx context.Context, id string, expectedVersion int, u P
 	}
 	if u.goalChange() && (p.Status == "approved" || p.Status == "running" || p.Status == "blocked" || p.Status == "done") {
 		var by, at string
-		err := d.QueryRowContext(ctx, `SELECT raised_by_agent_id, answered_at FROM interruptions
+		err := d.QueryRowContext(ctx, `SELECT COALESCE(raised_by_agent_id, ''), answered_at FROM interruptions
 			WHERE id = ? AND status = 'answered' AND plan_id = ?`, approvalRef, id).Scan(&by, &at)
 		if err != nil {
 			return Plan{}, domain.Errf(domain.PreconditionRequired,
@@ -211,6 +218,34 @@ func (d *DB) UpdatePlan(ctx context.Context, id string, expectedVersion int, u P
 		}
 	}
 	return d.GetPlan(ctx, id)
+}
+
+// DeletePlan removes a draft plan with all of its steps, deps and events.
+// Only draft plans are deletable (else Conflict).
+func (d *DB) DeletePlan(ctx context.Context, id string) error {
+	p, err := d.GetPlan(ctx, id)
+	if err != nil {
+		return err
+	}
+	if p.Status != "draft" {
+		return domain.Errf(domain.Conflict, "plan %s is %s, only draft plans are deletable", id, p.Status)
+	}
+	return d.WithTx(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.Exec(`DELETE FROM step_deps WHERE step_id IN (SELECT id FROM steps WHERE plan_id = ?)
+			OR depends_on_id IN (SELECT id FROM steps WHERE plan_id = ?)`, id, id); err != nil {
+			return fmt.Errorf("store: delete plan deps: %w", err)
+		}
+		if _, err := tx.Exec(`DELETE FROM events WHERE plan_id = ?`, id); err != nil {
+			return fmt.Errorf("store: delete plan events: %w", err)
+		}
+		if _, err := tx.Exec(`DELETE FROM steps WHERE plan_id = ?`, id); err != nil {
+			return fmt.Errorf("store: delete plan steps: %w", err)
+		}
+		if _, err := tx.Exec(`DELETE FROM plans WHERE id = ?`, id); err != nil {
+			return fmt.Errorf("store: delete plan: %w", err)
+		}
+		return nil
+	})
 }
 
 // approvePlanTx is the tx body of ApprovePlan (no events beyond the note).

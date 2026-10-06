@@ -53,6 +53,14 @@ func (d *DB) CreateTask(ctx context.Context, t Task) (Task, error) {
 	t.Version = 1
 	n := now()
 	t.CreatedAt, t.UpdatedAt = n, n
+	// requested_by may be a plain user (not an agent); only reference a real
+	// agent row in the event to satisfy the FK.
+	agent := t.RequestedBy
+	if agent != "" {
+		if _, err := d.GetAgent(ctx, agent); err != nil {
+			agent = ""
+		}
+	}
 	err := d.WithTx(ctx, func(tx *sql.Tx) error {
 		if _, err := tx.Exec(`INSERT INTO tasks (id, workstream_id, requested_by, title, description, acceptance_criteria, scope, status,
 			assignee_agent_id, outcome, attempt, added_by, version, created_at, updated_at)
@@ -61,7 +69,7 @@ func (d *DB) CreateTask(ctx context.Context, t Task) (Task, error) {
 			t.AddedBy, n, n); err != nil {
 			return fmt.Errorf("store: create task: %w", err)
 		}
-		_, err := AppendEventTx(tx, Event{AgentID: t.RequestedBy, TaskID: t.ID, Type: "note",
+		_, err := AppendEventTx(tx, Event{AgentID: agent, TaskID: t.ID, Type: "note",
 			Payload: mustJSON(map[string]any{"kind": "task_created", "title": t.Title})})
 		return err
 	})
@@ -145,6 +153,62 @@ func (d *DB) FinishTask(ctx context.Context, id string, expectedVersion int, sta
 	}
 	got.Version = version
 	return got, nil
+}
+
+// TaskUpdate is a PATCH-style task change (pending tasks only).
+type TaskUpdate struct {
+	Title              *string
+	Description        *string
+	AcceptanceCriteria *string
+	Scope              *string
+}
+
+// UpdateTask applies the patch guarded on the expected version. Only pending
+// tasks are editable (else Conflict).
+func (d *DB) UpdateTask(ctx context.Context, id string, expectedVersion int, u TaskUpdate) (Task, error) {
+	t, err := d.GetTask(ctx, id)
+	if err != nil {
+		return Task{}, err
+	}
+	if t.Status != "pending" {
+		return Task{}, domain.Errf(domain.Conflict, "task %s is %s, only pending tasks are editable", id, t.Status)
+	}
+	res, err := d.ExecContext(ctx, `UPDATE tasks SET
+		title = COALESCE(?, title),
+		description = COALESCE(?, description),
+		acceptance_criteria = COALESCE(?, acceptance_criteria),
+		scope = COALESCE(?, scope),
+		version = version + 1, updated_at = ?
+		WHERE id = ? AND version = ?`,
+		u.Title, u.Description, u.AcceptanceCriteria, u.Scope, now(), id, expectedVersion)
+	if err != nil {
+		return Task{}, fmt.Errorf("store: update task: %w", err)
+	}
+	if rows, _ := res.RowsAffected(); rows == 0 {
+		return Task{}, domain.Errf(domain.PreconditionFailed, "task %s version %d != expected %d", id, t.Version, expectedVersion)
+	}
+	return d.GetTask(ctx, id)
+}
+
+// DeleteTask removes a pending task (else Conflict).
+func (d *DB) DeleteTask(ctx context.Context, id string) error {
+	t, err := d.GetTask(ctx, id)
+	if err != nil {
+		return err
+	}
+	if t.Status != "pending" {
+		return domain.Errf(domain.Conflict, "task %s is %s, only pending tasks are deletable", id, t.Status)
+	}
+	err = d.WithTx(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.Exec(`DELETE FROM events WHERE task_id = ?`, id); err != nil {
+			return fmt.Errorf("store: delete task events: %w", err)
+		}
+		if _, err := tx.Exec(`DELETE FROM tasks WHERE id = ?`, id); err != nil {
+			return fmt.Errorf("store: delete task: %w", err)
+		}
+		return nil
+	})
+	return err
 }
 
 // CancelTask moves a pending task to cancelled (guarded on version).

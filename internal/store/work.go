@@ -72,6 +72,14 @@ func claimWorkTx(tx *sql.Tx, t workTable, id, planID, assignee string, expectedV
 	if status != "pending" {
 		return domain.Errf(domain.Conflict, "%s %s is %s, only pending work can be claimed", t.name, id, status)
 	}
+	if assignee != "" {
+		var one string
+		if err := tx.QueryRow(`SELECT id FROM agents WHERE id = ?`, assignee).Scan(&one); err == sql.ErrNoRows {
+			return domain.Errf(domain.Invalid, "agent %s is not registered", assignee)
+		} else if err != nil {
+			return fmt.Errorf("store: claim %s: %w", t.name, err)
+		}
+	}
 	if readyFn != nil {
 		if err := readyFn(); err != nil {
 			return err

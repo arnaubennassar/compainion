@@ -203,7 +203,7 @@ func TestInterruptionNextOrderingAndBatch(t *testing.T) {
 		}
 		return it
 	}
-	a := mk("t1", "low", true)    // created first but lowest priority
+	a := mk("t1", "low", true) // created first but lowest priority
 	b := mk("t1", "urgent", false)
 	c := mk("t2", "normal", true) // same priority as d, blocking first
 	d := mk("t2", "normal", false)

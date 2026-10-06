@@ -58,6 +58,9 @@ type Dispatcher struct {
 func (d *Dispatcher) Run(ctx context.Context) {
 	d.init()
 	d.Logger.Info("notify: dispatcher started")
+	if d.started == nil {
+		d.started = make(chan struct{})
+	}
 	cursor, err := store.LatestEventID(ctx, d.DB)
 	if err != nil {
 		d.Logger.Error("notify: latest event id", "err", err)
