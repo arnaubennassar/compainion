@@ -158,11 +158,9 @@ func (d *DB) UpsertFinding(ctx context.Context, f Finding) (Finding, bool, error
 			f.Category, f.Severity, f.Location, f.Title, f.Details, f.Fingerprint, f.Evidence, n, n); err != nil {
 			return fmt.Errorf("store: insert finding: %w", err)
 		}
-		out = f
-		out.Status = "new"
-		out.Occurrences = 1
 		created = true
-		return nil
+		out, err = loadFinding(ctx, tx, f.ID)
+		return err
 	})
 	if err != nil {
 		return Finding{}, false, err

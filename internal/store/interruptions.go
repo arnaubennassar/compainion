@@ -27,14 +27,14 @@ const interruptionCols = `id, workstream_id, raised_by_agent_id, plan_id, step_i
 
 func scanInterruption(r interface{ Scan(...any) error }) (Interruption, error) {
 	var it Interruption
-	var ws, plan, step, task, answered sql.NullString
+	var ws, raised, plan, step, task, answered sql.NullString
 	var blocking int
-	if err := r.Scan(&it.ID, &ws, &it.RaisedByAgentID, &plan, &step, &task,
+	if err := r.Scan(&it.ID, &ws, &raised, &plan, &step, &task,
 		&it.Topic, &it.Kind, &it.Priority, &it.Digest, &blocking, &it.Status,
 		&answered, &it.CreatedAt, &it.UpdatedAt); err != nil {
 		return Interruption{}, err
 	}
-	it.WorkstreamID, it.PlanID, it.StepID, it.TaskID = ws.String, strPtr(plan), strPtr(step), strPtr(task)
+	it.WorkstreamID, it.RaisedByAgentID, it.PlanID, it.StepID, it.TaskID = ws.String, raised.String, strPtr(plan), strPtr(step), strPtr(task)
 	it.Blocking = blocking != 0
 	if answered.Valid {
 		s := answered.String
@@ -396,6 +396,17 @@ func (d *DB) AnswerInterruption(ctx context.Context, interruptionID string, a An
 	var raisedBy string
 	var closed bool
 	err := d.WithTx(ctx, func(tx *sql.Tx) error {
+		// the interruption must still be presentable
+		var status string
+		if err := tx.QueryRowContext(ctx, `SELECT status FROM interruptions WHERE id = ?`, interruptionID).Scan(&status); err != nil {
+			if err == sql.ErrNoRows {
+				return domain.Errf(domain.NotFound, "interruption %s not found", interruptionID)
+			}
+			return fmt.Errorf("store: get interruption: %w", err)
+		}
+		if status != "open" && status != "presented" {
+			return domain.Errf(domain.Conflict, "interruption %s is %s and cannot be answered", interruptionID, status)
+		}
 		// question must exist and belong to this interruption
 		var qid string
 		if err := tx.QueryRowContext(ctx, `SELECT id FROM questions WHERE id = ? AND interruption_id = ?`, a.QuestionID, interruptionID).Scan(&qid); err != nil {
@@ -494,4 +505,33 @@ func transitionInterruption(ctx context.Context, d *DB, id string, from []string
 		return fmt.Errorf("store: transition interruption: %w", err)
 	}
 	return nil
+}
+
+// DeleteInterruption removes an interruption and its questions, suggestions
+// and answers in one transaction; NotFound if unknown.
+func (d *DB) DeleteInterruption(ctx context.Context, id string) error {
+	return d.WithTx(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx,
+			`DELETE FROM answers WHERE question_id IN (SELECT id FROM questions WHERE interruption_id = ?)`, id); err != nil {
+			return fmt.Errorf("store: delete answers: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx,
+			`DELETE FROM suggestions WHERE question_id IN (SELECT id FROM questions WHERE interruption_id = ?)`, id); err != nil {
+			return fmt.Errorf("store: delete suggestions: %w", err)
+		}
+		res, err := tx.ExecContext(ctx, `DELETE FROM questions WHERE interruption_id = ?`, id)
+		if err != nil {
+			return fmt.Errorf("store: delete questions: %w", err)
+		}
+		res2, err := tx.ExecContext(ctx, `DELETE FROM interruptions WHERE id = ?`, id)
+		if err != nil {
+			return fmt.Errorf("store: delete interruption: %w", err)
+		}
+		n1, _ := res.RowsAffected()
+		n2, _ := res2.RowsAffected()
+		if n1 == 0 && n2 == 0 {
+			return domain.Errf(domain.NotFound, "interruption %s not found", id)
+		}
+		return nil
+	})
 }
