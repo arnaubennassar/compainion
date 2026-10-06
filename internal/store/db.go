@@ -6,7 +6,6 @@ package store
 import (
 	"context"
 	"database/sql"
-	"database/sql/driver"
 	"embed"
 	"fmt"
 	"net/url"
@@ -132,12 +131,4 @@ func (d *DB) WithTx(ctx context.Context, fn func(tx *sql.Tx) error) error {
 		return err
 	}
 	return tx.Commit()
-}
-
-// nullStr converts "" to SQL NULL for optional FK columns.
-func nullStr(s string) driver.Value {
-	if s == "" {
-		return nil
-	}
-	return s
 }
