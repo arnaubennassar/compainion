@@ -144,6 +144,18 @@ cmd_spawn() { # name skills-csv prompt-file [--role worker|planner|orchestrator]
   elif [[ $# -gt 0 ]]; then
     echo "runs.sh: unexpected spawn argument: $1" >&2; exit 2
   fi
+  # Guard: session_id/name must be non-empty and lowercase [a-z0-9-].
+  # A malformed (e.g. empty) name has produced zombie duplicate workers before.
+  if [[ -z "$name" || ! "$name" =~ ^[a-z0-9-]+$ ]]; then
+    echo "runs.sh: invalid spawn name/session_id '${name:-<empty>}': must be non-empty and match ^[a-z0-9-]+$" >&2
+    exit 2
+  fi
+  # A task-derived name must carry a non-empty task id (worker-task-<id>):
+  # the empty-id form 'worker-task-' is the exact zombie-worker bug this guards.
+  if [[ "$name" == "worker-task-" ]]; then
+    echo "runs.sh: invalid spawn name/session_id '$name': task-derived names must be worker-task-<id> with a non-empty id" >&2
+    exit 2
+  fi
   set_role "${role_arg:-$(role_from_skills "$skills_csv")}"
   if [[ ! -r "$prompt_file" ]]; then
     echo "runs.sh: prompt file not found: $prompt_file" >&2
@@ -177,6 +189,7 @@ $SKILL_PARTS"
   run_id=$(jq -r '.run_id' <<<"$resp")
   [[ -n "$run_id" && "$run_id" != "null" ]] || { echo "runs.sh: no run_id in response: $resp" >&2; exit 1; }
   save_role "$name"
+  echo "runs.sh: spawned session_id: $name (run_id: $run_id)" >&2
   handle "$run_id" "$name"
 }
 
