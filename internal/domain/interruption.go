@@ -1,7 +1,7 @@
 package domain
 
 // AnswerTypes is the enum allowed for Question.AnswerType.
-var AnswerTypes = []string{"yes_no", "choice", "free_text"}
+var AnswerTypes = []string{"choice", "multi_choice", "free_text", "confirm"}
 
 type Suggestion struct {
 	ID          string `json:"id,omitempty"`
