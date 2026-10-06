@@ -23,7 +23,7 @@ done
 
 # 2. Every `capi <METHOD> <PATH>` must match a route in api/openapi.yaml
 check_py() {
-python3 - "$@" <<'PY'
+python3 - <<'PY'
 import re, sys, glob, json
 
 spec_path = "api/openapi.yaml"
