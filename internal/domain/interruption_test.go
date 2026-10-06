@@ -7,7 +7,7 @@ import (
 
 func TestValidateQuestions(t *testing.T) {
 	ok := []Question{
-		{Text: "Proceed?", AnswerType: "yes_no", Suggestions: []Suggestion{{Label: "yes"}, {Label: "no"}}},
+		{Text: "Proceed?", AnswerType: "choice", Suggestions: []Suggestion{{Label: "yes"}, {Label: "no"}}},
 		{Text: "Which?", AnswerType: "choice", Suggestions: []Suggestion{{Label: "a"}, {Label: "b", Recommended: true}}},
 	}
 	if err := ValidateQuestions(ok); err != nil {
@@ -16,7 +16,7 @@ func TestValidateQuestions(t *testing.T) {
 }
 
 func TestValidateQuestionsNeedsSuggestion(t *testing.T) {
-	qs := []Question{{Text: "q", AnswerType: "yes_no"}}
+	qs := []Question{{Text: "q", AnswerType: "choice"}}
 	err := ValidateQuestions(qs)
 	de, isDE := err.(*Error)
 	if !isDE {
@@ -26,7 +26,7 @@ func TestValidateQuestionsNeedsSuggestion(t *testing.T) {
 		t.Errorf("kind = %v, want Unprocessable", de.Kind)
 	}
 	// a question with an empty suggestions slice is also rejected
-	err = ValidateQuestions([]Question{{Text: "q", AnswerType: "yes_no", Suggestions: []Suggestion{}}})
+	err = ValidateQuestions([]Question{{Text: "q", AnswerType: "choice", Suggestions: []Suggestion{}}})
 	if err == nil {
 		t.Error("empty suggestions must be rejected")
 	}
@@ -61,7 +61,7 @@ func TestValidateQuestionsAnswerType(t *testing.T) {
 
 func TestValidateQuestionsPositionsAssigned(t *testing.T) {
 	qs := []Question{
-		{Text: "a", AnswerType: "yes_no", Suggestions: []Suggestion{{Label: "y"}}},
+		{Text: "a", AnswerType: "choice", Suggestions: []Suggestion{{Label: "y"}}},
 		{Text: "b", AnswerType: "choice", Suggestions: []Suggestion{{Label: "a"}}},
 	}
 	if err := ValidateQuestions(qs); err != nil {
@@ -74,7 +74,7 @@ func TestValidateQuestionsPositionsAssigned(t *testing.T) {
 
 func TestValidateQuestionsDuplicatePositionRejected(t *testing.T) {
 	qs := []Question{
-		{Position: 3, Text: "a", AnswerType: "yes_no", Suggestions: []Suggestion{{Label: "y"}}},
+		{Position: 3, Text: "a", AnswerType: "choice", Suggestions: []Suggestion{{Label: "y"}}},
 		{Position: 3, Text: "b", AnswerType: "choice", Suggestions: []Suggestion{{Label: "a"}}},
 	}
 	if err := ValidateQuestions(qs); err == nil {
