@@ -1,0 +1,1810 @@
+openapi: 3.0.3
+info:
+  title: CompAInion API
+  version: 0.1.0
+  description: |
+    REST backend for CompAInion: a Hermes session acting as "companion"
+    dispatches plans/tasks to detached Hermes workers and serves the user one
+    interruption at a time.
+
+    Conventions:
+    - Times are RFC3339 UTC strings.
+    - JSON-valued columns (`handle`, `scope`, `acceptance_checks`, `evidence`,
+      `payload`, `outcome`) are typed as their natural JSON shape here.
+    - Optimistic concurrency: plans/steps/tasks carry `version`; PATCH takes
+      `If-Match: "<version>"` (missing -> 428, stale -> 412). Responses carry an
+      `ETag: "<version>"` header.
+    - Every creating `POST` accepts `Idempotency-Key`; replay returns the cached
+      response with `Idempotent-Replayed: true`, same key + different body -> 422.
+    - Lists are cursor paginated: `?cursor=<last id>&limit=<n>` (default 50, max
+      200), envelope `{items, next_cursor}`.
+    - Errors are RFC 7807 `application/problem+json` (400/404/409/412/422/428).
+    - Step/task `status` is the stored status; `ready` is a derived boolean
+      (pending + all deps done). A `ready` value is exposed ONLY via this flag.
+servers:
+  - url: http://127.0.0.1:7777
+tags:
+  - name: workstreams
+  - name: agents
+  - name: plans
+  - name: steps
+  - name: tasks
+  - name: interruptions
+  - name: findings
+  - name: events
+  - name: subscriptions
+  - name: meta
+paths:
+  /workstreams:
+    get:
+      operationId: listWorkstreams
+      tags: [workstreams]
+      summary: List workstreams
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Paginated workstreams
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Page'
+                  - type: object
+                    required: [items]
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: '#/components/schemas/Workstream' }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      operationId: createWorkstream
+      tags: [workstreams]
+      summary: Create a workstream
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WorkstreamInput' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Workstream' }
+        '400': { $ref: '#/components/responses/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+  /workstreams/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      operationId: getWorkstream
+      tags: [workstreams]
+      responses:
+        '200':
+          description: The workstream
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Workstream' }
+        '404': { $ref: '#/components/responses/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+    patch:
+      operationId: updateWorkstream
+      tags: [workstreams]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WorkstreamInput' }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Workstream' }
+        '404': { $ref: '#/components/responses/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+    delete:
+      operationId: deleteWorkstream
+      tags: [workstreams]
+      description: Refused (409) while plans or tasks still reference it.
+      responses:
+        '204': { description: Deleted }
+        '409': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+  /agents:
+    get:
+      operationId: listAgents
+      tags: [agents]
+      description: Filters `role`, `status`, `parent_id`, `workstream_id`.
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - { name: role, in: query, schema: { $ref: '#/components/schemas/AgentRole' } }
+        - { name: status, in: query, schema: { $ref: '#/components/schemas/AgentStatus' } }
+        - { name: parent_id, in: query, schema: { type: string } }
+        - { name: workstream_id, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: Paginated agents
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Page'
+                  - type: object
+                    required: [items]
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: '#/components/schemas/Agent' }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      operationId: registerAgent
+      tags: [agents]
+      description: Idempotent on a supplied `id` if given.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AgentInput' }
+      responses:
+        '201':
+          description: Registered
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Agent' }
+        default: { $ref: '#/components/responses/Problem' }
+  /agents/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      operationId: getAgent
+      tags: [agents]
+      responses:
+        '200':
+          description: The agent
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Agent' }
+        '404': { $ref: '#/components/responses/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+    patch:
+      operationId: updateAgent
+      tags: [agents]
+      description: Status changes go through the agent state machine; nothing
+        leaves `finished`/`failed` (terminal). The backend never changes status
+        by itself (a stale heartbeat does not alter it).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AgentInput' }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Agent' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+  /agents/{id}/heartbeat:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      operationId: agentHeartbeat
+      tags: [agents]
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '204': { description: Recorded (sets `last_heartbeat_at`) }
+        '404': { $ref: '#/components/responses/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+  /agents/{id}/events:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      operationId: listAgentEvents
+      tags: [agents, events]
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Events addressed to this agent
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EventPage' }
+        '404': { $ref: '#/components/responses/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      operationId: appendAgentEvent
+      tags: [agents, events]
+      description: Append an event addressed to this agent (e.g. `type=steer`).
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EventInput' }
+      responses:
+        '201':
+          description: Appended
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Event' }
+        default: { $ref: '#/components/responses/Problem' }
+  /plans:
+    get:
+      operationId: listPlans
+      tags: [plans]
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - { name: workstream_id, in: query, schema: { type: string } }
+        - { name: status, in: query, schema: { $ref: '#/components/schemas/PlanStatus' } }
+      responses:
+        '200':
+          description: Paginated plans
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PlanPage' }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      operationId: createPlan
+      tags: [plans]
+      description: |
+        Creates the plan in status `draft` (`version` 1) and auto-creates the
+        `goal` step in the same transaction, setting `goal_step_id`.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PlanInput' }
+      responses:
+        '201':
+          description: Created (with `ETag`)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Plan' }
+        default: { $ref: '#/components/responses/Problem' }
+  /plans/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      operationId: getPlan
+      tags: [plans]
+      responses:
+        '200':
+          description: The plan (with `ETag`)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Plan' }
+        '404': { $ref: '#/components/responses/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+    patch:
+      operationId: updatePlan
+      tags: [plans]
+      description: |
+        Requires `If-Match`. Goal changes (`goals`, `acceptance_criteria`,
+        `acceptance_checks`) on a plan that is `approved`/`running`/`done`
+        require `approval_ref` - the id of an `answered` interruption for this
+        plan - otherwise 428.
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PlanInput' }
+      responses:
+        '200':
+          description: Updated (with `ETag`)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Plan' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '412': { $ref: '#/components/responses/Problem' }
+        '428': { $ref: '#/components/responses/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+    delete:
+      operationId: deletePlan
+      tags: [plans]
+      responses:
+        '204': { description: Deleted }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+  /plans/{id}/approve:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      operationId: approvePlan
+      tags: [plans]
+      description: Transition `draft -> approved`; sets `approved_by`/`approved_at`.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [approved_by]
+              properties:
+                approved_by: { type: string }
+      responses:
+        '200':
+          description: Approved
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Plan' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+  /plans/{id}/assign:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      operationId: assignPlan
+      tags: [plans]
+      description: Sets `orchestrator_agent_id`; only when `approved`; the agent
+        must have role `orchestrator` (else 422).
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [agent_id]
+              properties:
+                agent_id: { type: string }
+      responses:
+        '200':
+          description: Assigned
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Plan' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+  /plans/{id}/graph:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      operationId: getPlanGraph
+      tags: [plans]
+      description: Steps + dependency edges + the derived `ready` flag per step.
+      responses:
+        '200':
+          description: The plan graph
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PlanGraph' }
+        '404': { $ref: '#/components/responses/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+  /plans/{id}/steps:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      operationId: listPlanSteps
+      tags: [steps, plans]
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Paginated steps (blocked ones show `ready:false`)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StepPage' }
+        '404': { $ref: '#/components/responses/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      operationId: createStep
+      tags: [steps]
+      description: |
+        The plan must be `draft` or `running`. `kind=goal` is rejected on
+        create (only the plan creates it). `added_by` is required. `scope`
+        must be narrower than the plan scope. Deps must be same-plan and must
+        not introduce a cycle. A new step with no dependents automatically
+        becomes a dependency of the `goal` step (the DAG ends in goal).
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/StepInput' }
+      responses:
+        '201':
+          description: Created (with `ETag`)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Step' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+  /plans/{id}/steps/next:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      operationId: nextPlanSteps
+      tags: [steps]
+      description: Only `pending` steps whose deps are all `done`; each item has
+        `ready:true`.
+      responses:
+        '200':
+          description: Ready steps
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StepPage' }
+        '404': { $ref: '#/components/responses/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+  /steps/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      operationId: getStep
+      tags: [steps]
+      responses:
+        '200':
+          description: The step (with `ETag`)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Step' }
+        '404': { $ref: '#/components/responses/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+    patch:
+      operationId: updateStep
+      tags: [steps]
+      description: Only while stored status is `pending` (else 409). The goal
+        step needs `approval_ref` in the body (else 428). Requires `If-Match`.
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/StepInput' }
+      responses:
+        '200':
+          description: Updated (with `ETag`)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Step' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '412': { $ref: '#/components/responses/Problem' }
+        '428': { $ref: '#/components/responses/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+    delete:
+      operationId: deleteStep
+      tags: [steps]
+      description: Only `pending` steps that are not the goal step. The goal
+        step can never be deleted (409 even with `approval_ref`).
+      responses:
+        '204': { description: Deleted }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+  /steps/{id}/claim:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      operationId: claimStep
+      tags: [steps]
+      description: 'pending + ready -> in_progress; sets `assignee_agent_id`,'
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [agent_id]
+              properties:
+                agent_id: { type: string }
+      responses:
+        '200':
+          description: Claimed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Step' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+  /steps/{id}/finish:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      operationId: finishStep
+      tags: [steps]
+      description: |
+        Transitions `in_progress -> done|failed|blocked|interrupted`. `outcome`
+        is required and must carry `result`; `done` requires a non-empty
+        `outcome.evidence` (else 422). Completing the `goal` step sets the plan
+        `done` - but only if all other steps are `done`/`cancelled` (else 409).
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status, outcome]
+              properties:
+                status:
+                  type: string
+                  enum: [done, failed, blocked, interrupted]
+                outcome: { $ref: '#/components/schemas/Outcome' }
+            example:
+              status: done
+              outcome:
+                result: All unit tests pass; lint clean.
+                evidence: ['go test ./... -> ok', 'lint output empty']
+      responses:
+        '200':
+          description: Finished
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Step' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+  /steps/{id}/deps:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      operationId: addStepDep
+      tags: [steps]
+      description: Same editing rules as step update; `depends_on_id` must be a
+        step in the same plan and adding it must not create a cycle.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DependsOn' }
+      responses:
+        '204': { description: Added }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '412': { $ref: '#/components/responses/Problem' }
+        '428': { $ref: '#/components/responses/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+  /steps/{id}/deps/{dep_id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+      - name: dep_id
+        in: path
+        required: true
+        schema: { type: string }
+    delete:
+      operationId: removeStepDep
+      tags: [steps]
+      responses:
+        '204': { description: Removed }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '412': { $ref: '#/components/responses/Problem' }
+        '428': { $ref: '#/components/responses/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+  /tasks:
+    get:
+      operationId: listTasks
+      tags: [tasks]
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - { name: workstream_id, in: query, schema: { type: string } }
+        - { name: status, in: query, schema: { $ref: '#/components/schemas/WorkStatus' } }
+      responses:
+        '200':
+          description: Paginated tasks
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TaskPage' }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      operationId: createTask
+      tags: [tasks]
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TaskInput' }
+      responses:
+        '201':
+          description: Created (with `ETag`)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Task' }
+        default: { $ref: '#/components/responses/Problem' }
+  /tasks/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      operationId: getTask
+      tags: [tasks]
+      responses:
+        '200':
+          description: The task (with `ETag`)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Task' }
+        '404': { $ref: '#/components/responses/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+    patch:
+      operationId: updateTask
+      tags: [tasks]
+      description: Only while `pending`. Requires `If-Match`.
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TaskInput' }
+      responses:
+        '200':
+          description: Updated (with `ETag`)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Task' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '412': { $ref: '#/components/responses/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+    delete:
+      operationId: deleteTask
+      tags: [tasks]
+      description: Only `pending`.
+      responses:
+        '204': { description: Deleted }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+  /tasks/{id}/claim:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      operationId: claimTask
+      tags: [tasks]
+      description: Same rules as step claim.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [agent_id]
+              properties:
+                agent_id: { type: string }
+      responses:
+        '200':
+          description: Claimed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Task' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+  /tasks/{id}/finish:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      operationId: finishTask
+      tags: [tasks]
+      description: Same rules as step finish (`done` requires `outcome.evidence`).
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status, outcome]
+              properties:
+                status:
+                  type: string
+                  enum: [done, failed, blocked, interrupted]
+                outcome: { $ref: '#/components/schemas/Outcome' }
+      responses:
+        '200':
+          description: Finished
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Task' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+  /interruptions:
+    get:
+      operationId: listInterruptions
+      tags: [interruptions]
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - { name: status, in: query, schema: { $ref: '#/components/schemas/InterruptionStatus' } }
+        - { name: workstream_id, in: query, schema: { type: string } }
+        - { name: topic, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: Paginated interruptions
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InterruptionPage' }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      operationId: createInterruption
+      tags: [interruptions]
+      description: Validates the questions; inserts interruption + questions +
+        suggestions in one transaction; status `open`.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/InterruptionInput' }
+            example:
+              workstream_id: 01JABCWORKSTREAM000000
+              plan_id: 01JABCPLAN000000000000000
+              topic: plan-approval
+              kind: approval
+              priority: high
+              digest: Plan "Ship search" needs approval before execution.
+              blocking: true
+              questions:
+                - position: 1
+                  text: Approve the plan?
+                  answer_type: confirm
+                  suggestions:
+                    - label: Approve
+                      rationale: All acceptance checks are testable.
+                      recommended: true
+                    - label: Revise first
+                - position: 2
+                  text: Who should orchestrate execution?
+                  answer_type: choice
+                  suggestions:
+                    - label: Orchestrator agent A
+                      recommended: true
+                    - label: Keep it manual
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Interruption' }
+        default: { $ref: '#/components/responses/Problem' }
+  /interruptions/next:
+    get:
+      operationId: nextInterruption
+      tags: [interruptions]
+      description: |
+        Picks the single highest-priority `open` interruption (blocking first,
+        then priority rank, then oldest) and marks it `presented`; calling
+        again does NOT return the same one. Also returns `batch` - the ids of
+        the other `open` interruptions with the same `topic`. Returns 204 when
+        none is open. `wait=<seconds>` long-polls; 204 on timeout.
+      parameters:
+        - name: wait
+          in: query
+          description: Long-poll up to this many seconds.
+          schema: { type: integer, minimum: 0, maximum: 60 }
+      responses:
+        '200':
+          description: One interruption (now `presented`) with `batch` ids
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Interruption' }
+        '204':
+          description: No open interruption (immediately or after `wait`)
+        default: { $ref: '#/components/responses/Problem' }
+  /interruptions/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      operationId: getInterruption
+      tags: [interruptions]
+      description: Expanded with questions, suggestions and answers.
+      responses:
+        '200':
+          description: The interruption
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Interruption' }
+        '404': { $ref: '#/components/responses/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+    delete:
+      operationId: deleteInterruption
+      tags: [interruptions]
+      responses:
+        '204': { description: Deleted }
+        '404': { $ref: '#/components/responses/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+  /interruptions/{id}/answers:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      operationId: answerInterruption
+      tags: [interruptions]
+      description: |
+        Adds one answer. `mode` `suggestion`/`suggestion_with_comment` require a
+        `suggestion_id` belonging to that question; `free`/`needs_details` take
+        `text`. The user may use suggestion/suggestion_with_comment/free/
+        needs_details; the companion may use pushback/free (clarification).
+        With `final=true` the question becomes `answered`; when every question
+        is `answered|skipped` the interruption becomes `answered` and
+        `answered_at` is set.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AnswerInput' }
+      responses:
+        '200':
+          description: Answer recorded; returns the interruption
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Interruption' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+  /interruptions/{id}/dismiss:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      operationId: dismissInterruption
+      tags: [interruptions]
+      description: 'open|presented -> dismissed.'
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: Dismissed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Interruption' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+  /interruptions/{id}/reopen:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      operationId: reopenInterruption
+      tags: [interruptions]
+      description: Re-queues the interruption to `open` so a companion whose
+        context was cleared can re-present it.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: Reopened
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Interruption' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+  /findings:
+    get:
+      operationId: listFindings
+      tags: [findings]
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - { name: status, in: query, schema: { $ref: '#/components/schemas/FindingStatus' } }
+        - name: query
+          in: query
+          description: Case-insensitive LIKE on title/details/fingerprint.
+          schema: { type: string }
+      responses:
+        '200':
+          description: Paginated findings
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FindingPage' }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      operationId: createFinding
+      tags: [findings]
+      description: |
+        Upsert by fingerprint - 201 when created; 200 with `created:false` when
+        a matching non-final finding exists (its `occurrences` is incremented
+        and `evidence` merged); a `resolved` finding with resolution
+        `issue_opened|ignored` only gets its `occurrences` bumped (never
+        re-surfaced).
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/FindingInput' }
+            example:
+              reported_by_agent_id: 01JABCWORKER00000000000
+              plan_id: 01JABCPLAN000000000000000
+              step_id: 01JABCSTEP00000000000000
+              category: bug
+              severity: high
+              location: internal/store/steps.go:42
+              title: Nil map write in step claim
+              details: Claim writes to an uninitialised outcome map when attempt > 1.
+              evidence:
+                - { line: 42, snippet: 'm[k] = v' }
+      responses:
+        '201':
+          description: Created (`created:true`)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Finding' }
+        '200':
+          description: Deduplicated (`created:false`, `occurrences` bumped)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Finding' }
+        '422': { $ref: '#/components/responses/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+  /findings/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      operationId: getFinding
+      tags: [findings]
+      responses:
+        '200':
+          description: The finding
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Finding' }
+        '404': { $ref: '#/components/responses/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+  /findings/{id}/resolve:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      operationId: resolveFinding
+      tags: [findings]
+      description: Resolution is required; `issue_opened` requires
+        `resolution_ref`; `step_added` requires `resolution_ref` to be an
+        existing step id.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [resolution]
+              properties:
+                resolution:
+                  type: string
+                  enum: [issue_opened, step_added, ignored]
+                resolution_ref: { type: string }
+      responses:
+        '200':
+          description: Resolved
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Finding' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+  /findings/{id}/surface:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      operationId: surfaceFinding
+      tags: [findings]
+      description: Marks the finding `surfaced` and links the interruption that
+        presented it.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [interruption_id]
+              properties:
+                interruption_id: { type: string }
+      responses:
+        '200':
+          description: Surfaced
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Finding' }
+        '404': { $ref: '#/components/responses/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+  /events:
+    get:
+      operationId: listEvents
+      tags: [events]
+      description: |
+        Append-only event log ordered by ULID id. `since` is an exclusive
+        cursor (event id); `limit` default 100, max 500; order ascending;
+        `next_cursor` is the last id. `wait=<seconds>` long-polls for new
+        events (returns an empty page on timeout).
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - { name: since, in: query, schema: { type: string } }
+        - name: wait
+          in: query
+          description: Long-poll up to this many seconds.
+          schema: { type: integer, minimum: 0, maximum: 60 }
+        - { name: agent_id, in: query, schema: { type: string } }
+        - { name: plan_id, in: query, schema: { type: string } }
+        - { name: step_id, in: query, schema: { type: string } }
+        - { name: task_id, in: query, schema: { type: string } }
+        - { name: type, in: query, description: Repeatable., schema: { type: string } }
+      responses:
+        '200':
+          description: Paginated events
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EventPage' }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      operationId: appendEvent
+      tags: [events]
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EventInput' }
+      responses:
+        '201':
+          description: Appended
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Event' }
+        default: { $ref: '#/components/responses/Problem' }
+  /stream:
+    get:
+      operationId: streamEvents
+      tags: [events]
+      description: |
+        Server-sent events (signal only). Each message is
+        `id: <event id>\nevent: <type>\ndata: {"type":..,"id":..}\n\n`.
+        Honours `Last-Event-ID` (or the `since` query) by first replaying log
+        events with id greater than it. Heartbeat comment `: ping` every 15s.
+      parameters:
+        - name: types
+          in: query
+          description: Comma-separated event types to filter on.
+          schema: { type: string }
+        - { name: workstream_id, in: query, schema: { type: string } }
+        - { name: since, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: text/event-stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                example: |
+                  id: 01JABCDEVENT00000000000
+                  event: needs_input
+                  data: {"type":"needs_input","id":"01JABCDEVENT00000000000"}
+
+                  : ping
+        default: { $ref: '#/components/responses/Problem' }
+  /subscriptions:
+    get:
+      operationId: listSubscriptions
+      tags: [subscriptions]
+      responses:
+        '200':
+          description: Paginated subscriptions
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SubscriptionPage' }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      operationId: createSubscription
+      tags: [subscriptions]
+      description: Idempotent per (method, target) - posting the same pair twice
+        returns the same subscription id.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SubscriptionInput' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Subscription' }
+        '200':
+          description: Existing subscription returned (idempotent upsert)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Subscription' }
+        '422': { $ref: '#/components/responses/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+  /subscriptions/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      operationId: getSubscription
+      tags: [subscriptions]
+      responses:
+        '200':
+          description: The subscription
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Subscription' }
+        '404': { $ref: '#/components/responses/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+    delete:
+      operationId: deleteSubscription
+      tags: [subscriptions]
+      responses:
+        '204': { description: Deleted }
+        '404': { $ref: '#/components/responses/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+  /openapi.yaml:
+    get:
+      operationId: getOpenapiSpec
+      tags: [meta]
+      responses:
+        '200':
+          description: This document
+          content:
+            application/yaml:
+              schema: { type: string }
+  /healthz:
+    get:
+      operationId: getHealthz
+      tags: [meta]
+      responses:
+        '200':
+          description: Liveness
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { type: string, example: ok }
+components:
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+    Cursor:
+      name: cursor
+      in: query
+      description: Opaque cursor (the last id of the previous page).
+      schema: { type: string }
+    Limit:
+      name: limit
+      in: query
+      description: Page size (default 50, max 200 for resources; 100/500 for events).
+      schema: { type: integer, minimum: 1, maximum: 500, default: 50 }
+    IfMatch:
+      name: If-Match
+      in: header
+      description: 'Expected `version` as an ETag, e.g. "3". Required on PATCH'
+      schema: { type: string }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      description: Client-supplied key caching the response of this creating
+        POST. Same key + different body -> 422.
+      schema: { type: string }
+  responses:
+    Problem:
+      description: RFC 7807 problem details
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+  schemas:
+    Problem:
+      type: object
+      description: RFC 7807 problem details. `type` maps the domain error kind
+        (not_found, conflict, invalid, unprocessable, precondition_failed,
+        precondition_required).
+      required: [type, title, status]
+      properties:
+        type: { type: string, example: not_found }
+        title: { type: string, example: Resource not found }
+        status: { type: integer, example: 404 }
+        detail: { type: string, example: plan 01J... not found }
+        instance: { type: string }
+    Workstream:
+      type: object
+      required: [id, title, status, priority, created_at, updated_at]
+      properties:
+        id: { type: string }
+        title: { type: string }
+        status: { $ref: '#/components/schemas/WorkstreamStatus' }
+        priority: { type: integer }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    WorkstreamStatus:
+      type: string
+      enum: [active, paused, done, archived]
+    WorkstreamInput:
+      type: object
+      required: [title]
+      properties:
+        title: { type: string }
+        status: { $ref: '#/components/schemas/WorkstreamStatus' }
+        priority: { type: integer }
+    AgentRole:
+      type: string
+      enum: [companion, orchestrator, worker]
+    AgentStatus:
+      type: string
+      enum: [starting, running, waiting, idle, lost, finished, failed]
+    Agent:
+      type: object
+      required: [id, role, status, created_at, updated_at]
+      properties:
+        id: { type: string }
+        role: { $ref: '#/components/schemas/AgentRole' }
+        parent_id: { type: string }
+        harness: { type: string }
+        handle:
+          type: object
+          additionalProperties: true
+          description: Harness-specific handle (e.g. tmux session info).
+        status: { $ref: '#/components/schemas/AgentStatus' }
+        workstream_id: { type: string }
+        last_heartbeat_at: { type: string, format: date-time, nullable: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    AgentInput:
+      type: object
+      required: [role]
+      properties:
+        id:
+          type: string
+          description: Supply to register idempotently.
+        role: { $ref: '#/components/schemas/AgentRole' }
+        parent_id: { type: string }
+        harness: { type: string }
+        handle: { type: object, additionalProperties: true }
+        status: { $ref: '#/components/schemas/AgentStatus' }
+        workstream_id: { type: string }
+    PlanStatus:
+      type: string
+      enum: [draft, approved, running, blocked, done, failed, cancelled]
+    Plan:
+      type: object
+      required: [id, workstream_id, title, summary, goals, acceptance_criteria,
+        acceptance_checks, scope, status, version, created_at, updated_at]
+      properties:
+        id: { type: string }
+        workstream_id: { type: string }
+        title: { type: string }
+        summary: { type: string }
+        goals: { type: string }
+        acceptance_criteria: { type: string }
+        acceptance_checks:
+          type: array
+          items: { type: string }
+        scope:
+          type: object
+          additionalProperties: true
+        status: { $ref: '#/components/schemas/PlanStatus' }
+        creator_agent_id: { type: string }
+        orchestrator_agent_id: { type: string, nullable: true }
+        goal_step_id: { type: string, nullable: true }
+        approved_by: { type: string, nullable: true }
+        approved_at: { type: string, format: date-time, nullable: true }
+        version: { type: integer }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    PlanInput:
+      type: object
+      required: [workstream_id, title, goals]
+      properties:
+        workstream_id: { type: string }
+        title: { type: string }
+        summary: { type: string }
+        goals: { type: string }
+        acceptance_criteria: { type: string }
+        acceptance_checks: { type: array, items: { type: string } }
+        scope: { type: object, additionalProperties: true }
+        creator_agent_id: { type: string }
+        approval_ref:
+          type: string
+          description: Id of an `answered` interruption for this plan; required
+            for goal changes on approved+ plans.
+    PlanGraph:
+      type: object
+      required: [steps, edges]
+      properties:
+        steps:
+          type: array
+          items: { $ref: '#/components/schemas/Step' }
+        edges:
+          type: array
+          items: { $ref: '#/components/schemas/GraphEdge' }
+    GraphEdge:
+      type: object
+      required: [step_id, depends_on_id]
+      properties:
+        step_id: { type: string }
+        depends_on_id: { type: string }
+    WorkStatus:
+      type: string
+      description: Stored step/task status; `ready` is only ever the derived
+        boolean flag, never a status value.
+      enum: [pending, in_progress, done, failed, blocked, interrupted, cancelled]
+    StepKind:
+      type: string
+      enum: [task, checkpoint, goal]
+    AddedBy:
+      type: string
+      enum: [planner, orchestrator, user]
+    Step:
+      type: object
+      required: [id, plan_id, kind, title, description, acceptance_criteria,
+        scope, status, attempt, added_by, version, created_at, updated_at]
+      properties:
+        id: { type: string }
+        plan_id: { type: string }
+        kind: { $ref: '#/components/schemas/StepKind' }
+        title: { type: string }
+        description: { type: string }
+        acceptance_criteria: { type: string }
+        scope: { type: object, additionalProperties: true }
+        status: { $ref: '#/components/schemas/WorkStatus' }
+        ready:
+          type: boolean
+          description: Derived on read (pending + all deps done); never stored.
+        assignee_agent_id: { type: string, nullable: true }
+        outcome:
+          allOf:
+            - $ref: '#/components/schemas/Outcome'
+          nullable: true
+        attempt: { type: integer }
+        added_by: { $ref: '#/components/schemas/AddedBy' }
+        suggested_executor: { type: string }
+        version: { type: integer }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        deps:
+          type: array
+          description: Ids of steps this step depends on.
+          items: { type: string }
+    StepInput:
+      type: object
+      required: [kind, title, added_by]
+      properties:
+        kind: { $ref: '#/components/schemas/StepKind' }
+        title: { type: string }
+        description: { type: string }
+        acceptance_criteria: { type: string }
+        scope: { type: object, additionalProperties: true }
+        added_by: { $ref: '#/components/schemas/AddedBy' }
+        suggested_executor: { type: string }
+        deps:
+          type: array
+          description: Ids of same-plan steps this step depends on (cycle-checked).
+          items: { type: string }
+        approval_ref:
+          type: string
+          description: Required when editing the goal step.
+        depends_on_id:
+          type: string
+          description: For POST /steps/{id}/deps.
+    DependsOn:
+      type: object
+      required: [depends_on_id]
+      properties:
+        depends_on_id: { type: string }
+    Outcome:
+      type: object
+      required: [result]
+      properties:
+        result: { type: string }
+        evidence:
+          type: array
+          description: Required non-empty when finishing with `done`.
+          items: { type: string }
+    Task:
+      type: object
+      required: [id, workstream_id, requested_by, title, description,
+        acceptance_criteria, scope, status, attempt, added_by, version,
+        created_at, updated_at]
+      properties:
+        id: { type: string }
+        workstream_id: { type: string }
+        requested_by: { type: string }
+        title: { type: string }
+        description: { type: string }
+        acceptance_criteria: { type: string }
+        scope: { type: object, additionalProperties: true }
+        status: { $ref: '#/components/schemas/WorkStatus' }
+        assignee_agent_id: { type: string, nullable: true }
+        outcome:
+          allOf:
+            - $ref: '#/components/schemas/Outcome'
+          nullable: true
+        attempt: { type: integer }
+        added_by: { $ref: '#/components/schemas/AddedBy' }
+        version: { type: integer }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    TaskInput:
+      type: object
+      required: [workstream_id, requested_by, title, added_by]
+      properties:
+        workstream_id: { type: string }
+        requested_by: { type: string }
+        title: { type: string }
+        description: { type: string }
+        acceptance_criteria: { type: string }
+        scope: { type: object, additionalProperties: true }
+        added_by: { $ref: '#/components/schemas/AddedBy' }
+    InterruptionKind:
+      type: string
+      enum: [decision, approval, clarification, finding, fyi]
+    InterruptionPriority:
+      type: string
+      enum: [urgent, high, normal, low]
+    InterruptionStatus:
+      type: string
+      enum: [open, presented, answered, dismissed, expired]
+    QuestionAnswerType:
+      type: string
+      enum: [choice, multi_choice, free_text, confirm]
+    QuestionStatus:
+      type: string
+      enum: [open, answered, skipped]
+    AnswerAuthor:
+      type: string
+      enum: [user, companion]
+    AnswerMode:
+      type: string
+      enum: [suggestion, suggestion_with_comment, free, needs_details, pushback]
+    Suggestion:
+      type: object
+      required: [label, recommended]
+      properties:
+        id: { type: string }
+        label: { type: string }
+        rationale: { type: string }
+        recommended: { type: boolean }
+    Question:
+      type: object
+      required: [position, text, answer_type]
+      properties:
+        id: { type: string }
+        position: { type: integer }
+        text: { type: string }
+        answer_type: { $ref: '#/components/schemas/QuestionAnswerType' }
+        group: { type: string, nullable: true }
+        status: { $ref: '#/components/schemas/QuestionStatus' }
+        suggestions:
+          type: array
+          items: { $ref: '#/components/schemas/Suggestion' }
+        answers:
+          type: array
+          items: { $ref: '#/components/schemas/Answer' }
+    Answer:
+      type: object
+      required: [id, question_id, author, mode, final, created_at]
+      properties:
+        id: { type: string }
+        question_id: { type: string }
+        author: { $ref: '#/components/schemas/AnswerAuthor' }
+        mode: { $ref: '#/components/schemas/AnswerMode' }
+        suggestion_id: { type: string, nullable: true }
+        text: { type: string, nullable: true }
+        final: { type: boolean }
+        created_at: { type: string, format: date-time }
+    AnswerInput:
+      type: object
+      required: [question_id, author, mode]
+      properties:
+        question_id: { type: string }
+        author: { $ref: '#/components/schemas/AnswerAuthor' }
+        mode: { $ref: '#/components/schemas/AnswerMode' }
+        suggestion_id: { type: string }
+        text: { type: string }
+        final: { type: boolean, default: false }
+    SuggestionInput:
+      type: object
+      required: [label]
+      properties:
+        label: { type: string }
+        rationale: { type: string }
+        recommended: { type: boolean, default: false }
+    QuestionInput:
+      type: object
+      required: [position, text, answer_type]
+      properties:
+        position: { type: integer }
+        text: { type: string }
+        answer_type: { $ref: '#/components/schemas/QuestionAnswerType' }
+        group: { type: string }
+        suggestions:
+          type: array
+          items: { $ref: '#/components/schemas/SuggestionInput' }
+    Interruption:
+      type: object
+      required: [id, topic, kind, priority, digest, blocking, status,
+        created_at, updated_at]
+      properties:
+        id: { type: string }
+        workstream_id: { type: string }
+        raised_by_agent_id: { type: string }
+        plan_id: { type: string, nullable: true }
+        step_id: { type: string, nullable: true }
+        task_id: { type: string, nullable: true }
+        topic: { type: string }
+        kind: { $ref: '#/components/schemas/InterruptionKind' }
+        priority: { $ref: '#/components/schemas/InterruptionPriority' }
+        digest: { type: string }
+        blocking: { type: boolean }
+        status: { $ref: '#/components/schemas/InterruptionStatus' }
+        answered_at: { type: string, format: date-time, nullable: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        questions:
+          type: array
+          items: { $ref: '#/components/schemas/Question' }
+        batch:
+          type: array
+          description: Ids of the other `open` interruptions with the same
+            topic (returned by GET /interruptions/next).
+          items: { type: string }
+    InterruptionInput:
+      type: object
+      required: [topic, kind, priority, digest]
+      properties:
+        workstream_id: { type: string }
+        raised_by_agent_id: { type: string }
+        plan_id: { type: string }
+        step_id: { type: string }
+        task_id: { type: string }
+        topic: { type: string }
+        kind: { $ref: '#/components/schemas/InterruptionKind' }
+        priority: { $ref: '#/components/schemas/InterruptionPriority' }
+        digest: { type: string }
+        blocking: { type: boolean, default: true }
+        questions:
+          type: array
+          items: { $ref: '#/components/schemas/QuestionInput' }
+    FindingCategory:
+      type: string
+      enum: [bug, docs, config, observability, tech_debt, security, other]
+    FindingSeverity:
+      type: string
+      enum: [low, medium, high]
+    FindingStatus:
+      type: string
+      enum: [new, surfaced, resolved]
+    Finding:
+      type: object
+      required: [id, category, severity, title, details, fingerprint,
+        occurrences, evidence, status, created_at, updated_at]
+      properties:
+        id: { type: string }
+        reported_by_agent_id: { type: string }
+        plan_id: { type: string, nullable: true }
+        step_id: { type: string, nullable: true }
+        category: { $ref: '#/components/schemas/FindingCategory' }
+        severity: { $ref: '#/components/schemas/FindingSeverity' }
+        location:
+          type: string
+          description: 'file/symbol[:line]; trailing ":<line>" is stripped'
+        title: { type: string }
+        details: { type: string }
+        fingerprint: { type: string }
+        occurrences: { type: integer }
+        evidence:
+          type: array
+          items: { type: object, additionalProperties: true }
+        status: { $ref: '#/components/schemas/FindingStatus' }
+        resolution:
+          type: string
+          nullable: true
+          description: One of issue_opened, step_added, ignored.
+        resolution_ref: { type: string, nullable: true }
+        interruption_id: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        created:
+          type: boolean
+          description: True on 201 (new finding), false on 200 (dedupe).
+    FindingInput:
+      type: object
+      required: [category, severity, title, details]
+      properties:
+        reported_by_agent_id: { type: string }
+        plan_id: { type: string }
+        step_id: { type: string }
+        category: { $ref: '#/components/schemas/FindingCategory' }
+        severity: { $ref: '#/components/schemas/FindingSeverity' }
+        location: { type: string }
+        title: { type: string }
+        details: { type: string }
+        evidence:
+          type: array
+          items: { type: object, additionalProperties: true }
+    EventType:
+      type: string
+      enum: [started, progress, needs_input, finished, steer, error, note]
+    Event:
+      type: object
+      required: [id, type, payload, at]
+      properties:
+        id:
+          type: string
+          description: ULID; also the list cursor.
+        agent_id: { type: string }
+        plan_id: { type: string }
+        step_id: { type: string }
+        task_id: { type: string }
+        type: { $ref: '#/components/schemas/EventType' }
+        payload:
+          type: object
+          additionalProperties: true
+          description: JSON object. Synthetic companion signals ride
+            `type=note` with `payload.kind` set to
+            `interruption_created|agent_waiting|agent_lost|interruption_answered`.
+        at: { type: string, format: date-time }
+    EventInput:
+      type: object
+      required: [type]
+      properties:
+        agent_id: { type: string }
+        plan_id: { type: string }
+        step_id: { type: string }
+        task_id: { type: string }
+        type: { $ref: '#/components/schemas/EventType' }
+        payload: { type: object, additionalProperties: true }
+    SubscriptionMethod:
+      type: string
+      enum: [webhook, command]
+    Subscription:
+      type: object
+      required: [id, method, target, types, filter, active, created_at, updated_at]
+      properties:
+        id: { type: string }
+        method: { $ref: '#/components/schemas/SubscriptionMethod' }
+        target:
+          type: string
+          description: URL for webhook, shell command for command (payload
+            never enters the command line; delivered via COMPANION_EVENT_TYPE /
+            COMPANION_EVENT_ID env).
+        types:
+          type: array
+          description: Event types to deliver.
+          items: { type: string }
+        filter:
+          type: object
+          additionalProperties: true
+          description: 'e.g. {"kind":["interruption_created"]} filters payload.kind'
+        secret:
+          type: string
+          nullable: true
+          description: When set, webhooks carry X-Companion-Signature (hex
+            HMAC-SHA256 of the body).
+        active: { type: boolean }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    SubscriptionInput:
+      type: object
+      required: [method, target, types]
+      properties:
+        method: { $ref: '#/components/schemas/SubscriptionMethod' }
+        target: { type: string }
+        types: { type: array, items: { type: string } }
+        filter: { type: object, additionalProperties: true }
+        secret: { type: string }
+        active: { type: boolean, default: true }
+    Page:
+      type: object
+      description: Standard list envelope; `next_cursor` is null on the last page.
+      required: [items]
+      properties:
+        next_cursor: { type: string, nullable: true }
+    PlanPage:
+      allOf:
+        - $ref: '#/components/schemas/Page'
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items: { $ref: '#/components/schemas/Plan' }
+    StepPage:
+      allOf:
+        - $ref: '#/components/schemas/Page'
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items: { $ref: '#/components/schemas/Step' }
+    TaskPage:
+      allOf:
+        - $ref: '#/components/schemas/Page'
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items: { $ref: '#/components/schemas/Task' }
+    InterruptionPage:
+      allOf:
+        - $ref: '#/components/schemas/Page'
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items: { $ref: '#/components/schemas/Interruption' }
+    FindingPage:
+      allOf:
+        - $ref: '#/components/schemas/Page'
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items: { $ref: '#/components/schemas/Finding' }
+    EventPage:
+      allOf:
+        - $ref: '#/components/schemas/Page'
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items: { $ref: '#/components/schemas/Event' }
+    SubscriptionPage:
+      allOf:
+        - $ref: '#/components/schemas/Page'
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items: { $ref: '#/components/schemas/Subscription' }
