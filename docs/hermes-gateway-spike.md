@@ -263,3 +263,18 @@ report pwd/curl output/shell access.
 - Wall time spawn->completed: ~10 s.
 - Runtime cwd starts in the Hermes scratch dir; the worker must be told to
   `cd` explicitly (as the harness doc already prescribes for worktrees).
+
+### (e/4) Wake-up path — live-verified (see docs/live-acceptance.md)
+
+- `install.sh` created/updated the `companion-wake` route at
+  `/p/companion/webhooks/companion-wake` (deliver telegram,
+  mirror-to-session) and registered the companiond subscription with the
+  route secret; signature scheme worked as documented (companiond's
+  X-Webhook-Signature-V2 was accepted).
+- Three live defects found and fixed: route `--skills` resolve against the
+  DEFAULT profile (register `skills.external_dirs` there too + gateway
+  restart); the companion webhook platform needs
+  `tools enable terminal file skills delegation --platform webhook`;
+  route prompts must use literal absolute paths (variable indirection is
+  blocked by the command scanner). Final test: wake agent ran
+  `GET /interruptions/next` (200) and presented the interruption on Telegram.

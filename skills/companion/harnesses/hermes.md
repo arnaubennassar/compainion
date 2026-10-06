@@ -138,9 +138,20 @@ The companion/orchestrator merges or reviews the branch afterwards.
    POSTs to `http://127.0.0.1:8644/p/companion/webhooks/companion-wake`
    signed with the route's secret (`X-Webhook-Signature-V2` + `X-Webhook-Timestamp`).
 2. The Hermes route `companion-wake` (profile `companion`) runs the companion
-   agent with the fixed prompt `reconcile: present the next interruption` and
-   delivers the reply to Telegram (`--mirror-to-session` also writes it into
-   the chat session so replies there have context).
+   agent with a fixed prompt: load the `companion` skill, set
+   `COMPANION_HOME` + `COMPANIOND_URL`, run `scripts/capi GET
+   /interruptions/next` and present the next interruption (route prompts are
+   static strings, so `install.sh` bakes in the absolute repo path). The reply
+   is delivered to Telegram (`--mirror-to-session` also writes it into the
+   chat session so replies there have context).
+3. REQUIREMENT (live-verified): the companion profile's `webhook` platform
+   needs the `terminal`, `file`, `skills` and `delegation` toolsets enabled,
+   or the wake-up agent has no terminal tool and answers with an apology
+   instead of running capi. `install.sh` step 2b runs:
+   `hermes -p companion tools enable terminal file skills delegation --platform webhook`.
+   The repo skills dir must also be registered as `skills.external_dirs` on
+   BOTH the companion profile (for the profile CLI/agent) and the default
+   profile (the shared webhook platform resolves route `--skills` there).
 3. The notification is a SIGNAL only: the companion calls
    `capi GET /interruptions/next` itself and presents per the Telegram rules.
 4. The user replies in Telegram. The companion reconciles via

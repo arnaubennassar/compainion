@@ -19,8 +19,9 @@ make build && ./bin/companiond          # or: go run ./cmd/companiond
 #    hermes profile create companion
 #    hermes -p companion gateway setup    # Telegram token, webhook + API server keys
 
-# 3. Wire the gateway: skills dir, 'companion-wake' route, companiond subscription
-scripts/hermes/install.sh               # add --dry-run to preview every command
+# 3. Wire the gateway: skills dirs, webhook toolsets, 'companion-wake' route,
+#    companiond subscription (idempotent; --dry-run previews every command)
+scripts/hermes/install.sh
 
 # 4. Start the companion gateway and message your bot on Telegram
 hermes -p companion gateway run
@@ -30,7 +31,10 @@ The wake-up path: companiond webhook subscription → Hermes route
 `companion-wake` (`/p/companion/webhooks/companion-wake`, delivers to Telegram,
 mirrors to the chat session) → the companion runs
 `GET /interruptions/next` and presents one interruption → your reply is
-reconciled against `GET /interruptions?status=presented`.
+reconciled against `GET /interruptions?status=presented`. Requires the repo
+skills dir registered on both profiles and `terminal file skills delegation`
+toolsets enabled on the companion profile's webhook platform (`install.sh`
+does both).
 
 Worker lifecycle (spawn / status / resume / output) goes through
 `scripts/hermes/runs.sh`; workers run on the companion profile with per-role

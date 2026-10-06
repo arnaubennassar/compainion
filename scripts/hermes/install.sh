@@ -9,8 +9,11 @@
 #
 # Steps:
 #   1. Verify companiond answers on $COMPANIOND_URL/healthz.
-#   2. Make the repo skills visible to the companion profile
-#      (skills.external_dirs via `hermes config set`).
+#   2. Make the repo skills visible to the companion profile AND the default
+#      profile (the webhook platform resolves route --skills against the
+#      default profile) via skills.external_dirs.
+#   2b. Enable terminal/file/skills/delegation toolsets on the companion
+#       profile's webhook platform (otherwise the wake-up agent cannot run capi).
 #   3. Create the Hermes webhook route `companion-wake` (deliver telegram,
 #      mirror to session, bound to the companion profile) if absent.
 #   4. Read the route's auto-generated secret from
@@ -72,7 +75,7 @@ manual_skills_instruction() {
 EOF
 }
 
-echo "CompAInion gateway install (repo: $repo)${DRY_RUN:+ [DRY-RUN]}"
+echo "CompAInion gateway install (repo: $repo)$( (( DRY_RUN )) && printf ' [DRY-RUN]' )"
 
 # --- 1. companiond health -----------------------------------------------------
 echo "1) Verify companiond at $COMPANIOND_URL"
@@ -84,42 +87,71 @@ else
   echo "   OK"
 fi
 
-# --- 2. skills visible to the companion profile -------------------------------
-echo "2) Skills external dir for profile '$COMPANION_PROFILE'"
+# --- 2. skills visible to the companion AND default profiles ------------------
+echo "2) Skills external dir for profiles '$COMPANION_PROFILE' and default"
 if (( DRY_RUN )); then
   try hermes -p "$COMPANION_PROFILE" config get skills.external_dirs
   try hermes -p "$COMPANION_PROFILE" config set skills.external_dirs "[\"$repo/skills\"]"
+  try hermes config set skills.external_dirs "[\"$repo/skills\"]"
 else
-  current="$(hermes -p "$COMPANION_PROFILE" config get skills.external_dirs 2>/dev/null || true)"
-  if [[ -n "$current" ]] && grep -qF "$repo/skills" <<<"$current"; then
-    echo "   already registered"
-  else
-    run hermes -p "$COMPANION_PROFILE" config set skills.external_dirs "[\"$repo/skills\"]"
-    current="$(hermes -p "$COMPANION_PROFILE" config get skills.external_dirs 2>/dev/null || true)"
-    if [[ -z "$current" ]] || ! grep -qF "$repo/skills" <<<"$current"; then
-      manual_skills_instruction
-      exit 1
+  for prof in "$COMPANION_PROFILE" ""; do
+    if [[ -n "$prof" ]]; then
+      cfg=(hermes -p "$prof" config set skills.external_dirs "[\"$repo/skills\"]")
+      get=(hermes -p "$prof" config get skills.external_dirs)
+    else
+      cfg=(hermes config set skills.external_dirs "[\"$repo/skills\"]")
+      get=(hermes config get skills.external_dirs)
+      prof=default
     fi
+    current="$("${get[@]}" 2>/dev/null || true)"
+    if [[ -n "$current" ]] && grep -qF "$repo/skills" <<<"$current"; then
+      echo "   $prof: already registered"
+    else
+      run "${cfg[@]}"
+      current="$("${get[@]}" 2>/dev/null || true)"
+      if [[ -z "$current" ]] || ! grep -qF "$repo/skills" <<<"$current"; then
+        manual_skills_instruction
+        exit 1
+      fi
+    fi
+  done
+fi
+
+# --- 2b. webhook-platform toolsets on the companion profile --------------------
+echo "2b) Toolsets for the '$COMPANION_PROFILE' webhook platform"
+# Without terminal/file/skills/delegation the wake-up agent cannot run capi.
+if (( DRY_RUN )); then
+  try hermes -p "$COMPANION_PROFILE" tools enable terminal file skills delegation --platform webhook
+else
+  enabled="$(hermes -p "$COMPANION_PROFILE" tools list --platform webhook 2>/dev/null || true)"
+  if grep -q 'enabled  terminal' <<<"$enabled" && grep -q 'enabled  delegation' <<<"$enabled"; then
+    echo "   already enabled"
+  else
+    run hermes -p "$COMPANION_PROFILE" tools enable terminal file skills delegation --platform webhook
   fi
 fi
 
 # --- 3. Hermes webhook route ---------------------------------------------------
 echo "3) Hermes webhook route '$ROUTE'"
+# Static prompt (the route prompt cannot interpolate): absolute repo path and
+# capi path so the wake-up agent knows exactly what to run.
+# Use LITERAL paths, not $VAR indirection: the gateway command scanner flags
+# nested/variable executable bodies and blocks the terminal call behind an
+# approval the webhook agent cannot answer (live-verified failure mode).
+WAKE_PROMPT="You are the CompAInion companion wake-up. Load the \`companion\` skill. Export COMPANIOND_URL=$COMPANIOND_URL (COMPANION_HOME is $repo). Then run exactly: $repo/scripts/capi GET /interruptions/next - and present the next interruption per the companion skill's Telegram presentation rules (digest line first, one question at a time, numbered suggestions, recommended first). If there is none, reply exactly: Nothing pending."
 ROUTE_CMD=(hermes webhook subscribe "$ROUTE"
-  --prompt 'reconcile: present the next interruption'
+  --prompt "$WAKE_PROMPT"
   --skills companion
   --route-profile "$COMPANION_PROFILE"
   --deliver telegram
   --mirror-to-session)
+# Re-running subscribe UPDATES the existing route (new prompt), but rotates the
+# secret - the companiond subscription in step 5 is therefore always refreshed.
 if (( DRY_RUN )); then
-  echo "   (created only if absent; check with: hermes webhook list)"
+  echo "   (subscribe creates the route if absent and updates it otherwise)"
   run "${ROUTE_CMD[@]}"
 else
-  if hermes webhook list 2>/dev/null | grep -qF "$ROUTE"; then
-    echo "   route already exists"
-  else
-    run "${ROUTE_CMD[@]}"
-  fi
+  run "${ROUTE_CMD[@]}"
 fi
 
 # --- 4. route secret -----------------------------------------------------------
@@ -137,8 +169,15 @@ fi
 echo "5) companiond webhook subscription -> $TARGET"
 BODY_PRINT='{"method":"webhook","target":"'"$TARGET"'","types":["note"],"filter":{"kind":["interruption_created","agent_waiting","agent_lost"]},"secret":"<secret>"}'
 if (( DRY_RUN )); then
+  echo "  \$ COMPANION_HOME=$repo $repo/scripts/capi DELETE /subscriptions/<old-$ROUTE>"
   echo "  \$ COMPANION_HOME=$repo $repo/scripts/capi POST /subscriptions '$BODY_PRINT'"
 else
+  # delete stale subscriptions pointing at the same route (secret rotated above)
+  old_ids="$(COMPANION_HOME="$repo" "$repo/scripts/capi" GET /subscriptions 2>/dev/null \
+    | jq -r --arg t "$TARGET" '.items[]? | select(.target == $t) | .id' || true)"
+  for old in $old_ids; do
+    run env COMPANION_HOME="$repo" "$repo/scripts/capi" DELETE "/subscriptions/$old"
+  done
   body="$(jq -n --arg target "$TARGET" --arg secret "$SECRET" \
     '{method:"webhook", target:$target, types:["note"],
       filter:{kind:["interruption_created","agent_waiting","agent_lost"]},
