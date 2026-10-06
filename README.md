@@ -46,7 +46,8 @@ internal/domain|store|api|events|notify|ids|config|testutil
 skills/companion/           companion skill + harness doc (harnesses/hermes.md)
 skills/create-plan|execute-plan|execute-task/   worker skills
 scripts/capi                curl+jq REST client used by all skills
-scripts/hermes/runs.sh      gateway Runs API helper (spawn/status/resume/output)
+scripts/hermes/runs.sh      gateway Runs API helper (spawn/status/resume/output;
+                            companion profile: /p/companion)
 scripts/hermes/install.sh   gateway wiring (idempotent, --dry-run)
 scripts/check-skills.sh     validates skill docs against openapi.yaml
 docs/hermes-gateway-spike.md  verified gateway behaviour (signatures, profiles, ports)

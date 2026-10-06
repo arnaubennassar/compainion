@@ -2,12 +2,13 @@
 
 How detached Hermes agents (workers, orchestrators, digest workers) are spawned,
 observed, steered and inspected when the harness is the Hermes gateway Runs API
-(127.0.0.1:8642) — no tmux anywhere. The companion itself is NOT spawned this
+(companion profile: `http://127.0.0.1:8642/p/companion`) — no tmux anywhere. The companion itself is NOT spawned this
 way: it is the Hermes profile `companion` serving Telegram (see "Wake-up flow").
 
 All operations go through `scripts/hermes/runs.sh` (env: `HERMES_API_URL`
-default `http://127.0.0.1:8642`, `HERMES_API_KEY` default `API_SERVER_KEY` from
-`~/.hermes/.env`, `COMPANION_HOME` = repo root so skills can be embedded).
+default `http://127.0.0.1:8642/p/companion` (workers run AS the companion
+profile — the default profile has no LLM provider), `HERMES_API_KEY` default
+`API_SERVER_KEY` from `~/.hermes/profiles/companion/.env`, `COMPANION_HOME` = repo root so skills can be embedded).
 Never log or echo the API key.
 
 ## The four questions

@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # install.sh - wire the CompAInion wake-up path (Amendment 1, task A4).
 #
+# Note: worker runs (scripts/hermes/runs.sh) execute on the companion profile
+# (HERMES_API_URL default http://127.0.0.1:8642/p/companion) because the default
+# profile has no LLM provider configured.
+#
 # Idempotent. With --dry-run it prints every command instead of running it.
 #
 # Steps:

@@ -7,12 +7,12 @@
 #   runs.sh resume <session_id> <text|@file>           -> new handle JSON
 #
 # Env:
-#   HERMES_API_URL  default http://127.0.0.1:8642
-#   HERMES_API_KEY  default: API_SERVER_KEY read from ~/.hermes/.env (never echoed)
+#   HERMES_API_URL  default http://127.0.0.1:8642/p/companion
+#   HERMES_API_KEY  default: API_SERVER_KEY read from ~/.hermes/profiles/companion/.env (never echoed)
 #   COMPANION_HOME  repo root; skills read from $COMPANION_HOME/skills/<name>/SKILL.md
 set -euo pipefail
 
-HERMES_API_URL="${HERMES_API_URL:-http://127.0.0.1:8642}"
+HERMES_API_URL="${HERMES_API_URL:-http://127.0.0.1:8642/p/companion}"
 HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
 
 api_key() {
@@ -21,9 +21,9 @@ api_key() {
     return
   fi
   local key
-  key=$(grep -E '^API_SERVER_KEY=' "$HERMES_HOME/.env" 2>/dev/null | head -n1 | cut -d= -f2- || true)
+  key=$(grep -E '^API_SERVER_KEY=' "$HERMES_HOME/profiles/companion/.env" 2>/dev/null | head -n1 | cut -d= -f2- || true)
   if [[ -z "$key" ]]; then
-    echo "runs.sh: HERMES_API_KEY unset and API_SERVER_KEY not found in $HERMES_HOME/.env" >&2
+    echo "runs.sh: HERMES_API_KEY unset and API_SERVER_KEY not found in $HERMES_HOME/profiles/companion/.env" >&2
     exit 1
   fi
   printf '%s' "$key"
