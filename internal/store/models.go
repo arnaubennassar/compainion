@@ -211,3 +211,10 @@ func nullStr(s string) driver.Value {
 	}
 	return s
 }
+
+func ptrStr(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
+}
