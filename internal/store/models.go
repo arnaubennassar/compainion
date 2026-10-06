@@ -71,6 +71,8 @@ type Step struct {
 	UpdatedAt          string  `json:"updated_at"`
 	// Deps is filled by the steps repository on read; not a column.
 	Deps []string `json:"deps,omitempty"`
+	// Ready is derived on read: pending and all deps done. Not a column.
+	Ready bool `json:"ready,omitempty"`
 }
 
 // Task is a standalone unit of work (no plan).
@@ -146,7 +148,9 @@ type Answer struct {
 	CreatedAt    string  `json:"created_at"`
 }
 
-// Finding is a reported observation with dedupe fingerprint.
+// Finding is a reported observation with dedupe fingerprint. Location is the
+// file/symbol the finding came from; it participates in the fingerprint
+// (domain.Fingerprint) with its trailing ":<line>" stripped.
 type Finding struct {
 	ID                string  `json:"id"`
 	ReportedByAgentID string  `json:"reported_by_agent_id,omitempty"`
@@ -154,6 +158,7 @@ type Finding struct {
 	StepID            *string `json:"step_id,omitempty"`
 	Category          string  `json:"category"`
 	Severity          string  `json:"severity"`
+	Location          string  `json:"location,omitempty"`
 	Title             string  `json:"title"`
 	Details           string  `json:"details"`
 	Fingerprint       string  `json:"fingerprint"`

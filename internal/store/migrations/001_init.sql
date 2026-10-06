@@ -151,6 +151,7 @@ CREATE TABLE findings (
     step_id             TEXT REFERENCES steps(id),
     category            TEXT NOT NULL CHECK (category IN ('bug','docs','config','observability','tech_debt','security','other')),
     severity            TEXT NOT NULL CHECK (severity IN ('low','medium','high')),
+    location            TEXT NOT NULL DEFAULT '',
     title               TEXT NOT NULL,
     details             TEXT NOT NULL DEFAULT '',
     fingerprint         TEXT NOT NULL,
@@ -164,8 +165,12 @@ CREATE TABLE findings (
     updated_at          TEXT NOT NULL
 );
 
+-- Dedupe index: at most one NON-resolved finding per fingerprint. Resolved
+-- rows are excluded: upsert logic in findings.go decides per resolution kind
+-- (issue_opened|ignored -> bump in place, never re-surface; step_added -> the
+-- issue can be re-reported as a new finding).
 CREATE UNIQUE INDEX findings_open_fingerprint ON findings(fingerprint)
-    WHERE status != 'resolved' OR resolution NOT IN ('issue_opened','ignored');
+    WHERE status != 'resolved';
 
 CREATE TABLE events (
     id        TEXT PRIMARY KEY,
