@@ -84,8 +84,8 @@ type recorder struct {
 	body   string
 }
 
-func (r *recorder) Header() http.Header        { return r.header }
-func (r *recorder) WriteHeader(c int)          { r.code = c }
+func (r *recorder) Header() http.Header         { return r.header }
+func (r *recorder) WriteHeader(c int)           { r.code = c }
 func (r *recorder) Write(b []byte) (int, error) { r.body += string(b); return len(b), nil }
 
 func TestHealthz(t *testing.T) {

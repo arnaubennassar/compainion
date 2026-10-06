@@ -31,6 +31,9 @@ func NewWithLogger(db *store.DB, log *slog.Logger) *Server {
 	}
 	s := &Server{db: db, log: log, mux: http.NewServeMux()}
 	s.handle("GET /healthz", s.healthz)
+	s.registerPlans()
+	s.registerSteps()
+	s.registerTasks()
 	s.registerWorkstreams()
 	s.registerAgents()
 	s.registerEvents()
