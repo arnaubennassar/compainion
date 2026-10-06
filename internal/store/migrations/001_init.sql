@@ -97,11 +97,11 @@ CREATE TABLE interruptions (
     step_id            TEXT REFERENCES steps(id),
     task_id            TEXT REFERENCES tasks(id),
     topic              TEXT NOT NULL,
-    kind               TEXT NOT NULL CHECK (kind IN ('approval','question','finding','info')),
+    kind               TEXT NOT NULL CHECK (kind IN ('decision','approval','clarification','finding','fyi')),
     priority           TEXT NOT NULL CHECK (priority IN ('urgent','high','normal','low')),
     digest             TEXT NOT NULL DEFAULT '',
     blocking           INTEGER NOT NULL DEFAULT 0,
-    status             TEXT NOT NULL CHECK (status IN ('open','presented','answered','dismissed')),
+    status             TEXT NOT NULL CHECK (status IN ('open','presented','answered','dismissed','expired')),
     answered_at        TEXT,
     created_at         TEXT NOT NULL,
     updated_at         TEXT NOT NULL
@@ -115,7 +115,7 @@ CREATE TABLE questions (
     text            TEXT NOT NULL,
     answer_type     TEXT NOT NULL CHECK (answer_type IN ('choice','multi_choice','free_text','confirm')),
     grp             TEXT,
-    status          TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','answered','skipped')),
+    status          TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','answered','skipped')),
     created_at      TEXT NOT NULL,
     updated_at      TEXT NOT NULL
 );
@@ -149,8 +149,8 @@ CREATE TABLE findings (
     reported_by_agent_id TEXT REFERENCES agents(id),
     plan_id             TEXT REFERENCES plans(id),
     step_id             TEXT REFERENCES steps(id),
-    category            TEXT NOT NULL CHECK (category IN ('bug','security','performance','improvement','question','note')),
-    severity            TEXT NOT NULL CHECK (severity IN ('info','low','medium','high','critical')),
+    category            TEXT NOT NULL CHECK (category IN ('bug','docs','config','observability','tech_debt','security','other')),
+    severity            TEXT NOT NULL CHECK (severity IN ('low','medium','high')),
     title               TEXT NOT NULL,
     details             TEXT NOT NULL DEFAULT '',
     fingerprint         TEXT NOT NULL,
