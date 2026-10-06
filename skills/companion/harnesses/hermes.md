@@ -3,7 +3,8 @@
 How detached Hermes agents (workers, orchestrators, digest workers) are spawned,
 observed, steered and inspected when the harness is the Hermes gateway Runs API
 (companion profile: `http://127.0.0.1:8642/p/companion`) — no tmux anywhere. The companion itself is NOT spawned this
-way: it is the Hermes profile `companion` serving Telegram (see "Wake-up flow").
+way: it is the Hermes profile `companion` serving Telegram (see "How the
+companion is woken").
 
 All operations go through `scripts/hermes/runs.sh` (env: `HERMES_API_URL`
 default `http://127.0.0.1:8642/p/companion` (workers run AS the companion
@@ -173,7 +174,15 @@ Answer it with:
 `POST /v1/runs/{run_id}/approval {"choice":"once"}` (field is `choice`, not
 `decision`; `session` approves for the rest of the run). The run then continues
 to completion on its own. Prefer writing plain `scripts/capi ...` commands in
-worker prompts to avoid the flag.
+worker prompts to avoid the flag. LIVE-RECONFIRMED (2026-10-06, session-driven
+loop): the variable form `"$COMPANION_HOME/scripts/companion-wait"` was
+flagged ("nested executable body could not be resolved") even though the prompt
+asked for plain `scripts/companion-wait` - models "helpfully" expand paths.
+Instruct: export PATH to include `$COMPANION_HOME/scripts`, then run the bare
+literal `scripts/companion-wait --max 20`. Note also that `runs.sh status`
+maps the `waiting_for_approval` Runs-API status to `unknown` (it is not
+started/running/completed/failed/cancelled) - read the raw run object via
+`GET /v1/runs/{id}` to see the approval block.
 
 ## Known limitations / unverified items (from the gateway spike)
 

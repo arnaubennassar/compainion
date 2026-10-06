@@ -17,6 +17,11 @@ your context. Context may be cleared at any moment - nothing may live only in co
 
 - All API calls go through `scripts/capi` (`$COMPANION_HOME/scripts/capi`). If
   `COMPANION_HOME` is unset, `export COMPANION_HOME=<repo>` first.
+- Each terminal call may run in a FRESH shell: re-export
+  `COMPANION_HOME`, `COMPANIOND_URL`, `COMPANION_WAIT_MAX` and
+  `PATH="$COMPANION_HOME/scripts:$PATH"` at the start of EVERY terminal
+  invocation (or prefix the command with `env`). Never rely on exports from an
+  earlier call - a wait silently pointed at the wrong daemon once.
 - Spawning/status/resume/output of workers is done with
   `scripts/hermes/runs.sh` - see `harnesses/hermes.md` for the four operations
   (`spawn`, `status`, `resume`, `output`).
@@ -103,8 +108,8 @@ Run this on every turn start:
 ## Idle: the blocking wait
 
 When step 3 returns 204 (queue clear), run the blocking wait as ONE terminal
-call with the LITERAL absolute path and a max that survives the terminal tool
-timeout:
+call with the literal relative path (PATH already points at
+`$COMPANION_HOME/scripts`) and a max that survives the terminal tool timeout:
 
     scripts/companion-wait --max 240
 

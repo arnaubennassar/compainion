@@ -66,45 +66,89 @@ Task `01M48Y8FB80HEKT0K8QRWFDRG8` (choice staging vs production, explicitly
   `decision`). Worker then finished: task `done` with evidence including
   "chose Production", agent `finished`.
 
-## 6. Wake-up path (Telegram)
+## 6. Session-driven loop (2026-10-06, replaces the dropped webhook wake-up)
 
-`scripts/hermes/install.sh` run for real (after showing `--dry-run`): skills
-external dir on BOTH profiles, toolsets, route `companion-wake`
-(`/p/companion/webhooks/companion-wake`, deliver telegram, mirror-to-session),
-companiond subscription.
+DECISION: the webhook wake-up path is gone. The companion is woken only by a
+user message (Telegram chat / CLI session) or by its own blocking wait,
+`scripts/companion-wait --max 240` (test-first: `scripts/test-companion-wait.sh`,
+throwaway daemon on 127.0.0.1:7791, temp DB + temp XDG_STATE_HOME - prints
+`companion-wait: OK`; covers timeout, interruption wake, events wake + cursor
+advance, self-authored-event exclusion).
 
-Verified by creating interruptions; the route accepted the webhook (agent run
-started) and the reply was mirrored into the Telegram chat session
-(`gateway.log: "Route 'companion-wake' delivery mirrored into
-telegram:457668760 session"`).
+Live acceptance WITHOUT the human: throwaway companiond on 127.0.0.1:7792 (temp
+DB, `COMPANIOND_URL` exported), Runs API on the companion profile
+(`scripts/hermes/runs.sh spawn acc-comp-N companion <prompt>` - the companion
+skill body embedded as instructions, worker model
+openrouter/z-ai/glm-5.3-flash), `COMPANION_WAIT_MAX=20` for speed.
 
-Failure modes found and FIXED along the way:
+(i) 'start' with an open interruption (seeded via
+`COMPANIOND_URL=http://127.0.0.1:7792 scripts/capi POST /interruptions`,
+2 suggestions): run acc-comp-1 registered agent `companion-main`, heartbeated,
+called `GET /interruptions/next` (200 in companiond log), interruption status
+became `presented`, run COMPLETED (~20 s) and its output presented digest +
+numbered suggestions:
 
-1. `Skill 'companion' not found` on webhook runs -> the shared webhook
-   platform resolves route `--skills` against the DEFAULT profile;
-   `skills.external_dirs` must be registered there too + gateway restart.
-2. Webhook agent had no terminal tool ("cannot run capi") ->
-   `hermes -p companion tools enable terminal file skills delegation
-   --platform webhook` (now install.sh step 2b).
-3. Wake agent's `$COMPANION_HOME/scripts/capi` was flagged by the command
-   scanner (nested executable body) and blocked behind an approval ->
-   route prompt now uses LITERAL absolute paths. Final test: agent executed
-   `GET /interruptions/next` (200 in companiond log) and presented the
-   interruption on Telegram. Loop closed: the user then messaged the bot and
-   replies reconcile via `GET /interruptions?status=presented`.
+    Deploy to staging or production?
+
+    1) Staging (recommended — safer)
+    2) Production
+
+    Reply with 1 or 2.
+
+(ii) `runs.sh resume acc-comp-1 '1'`: answer POSTed
+(`POST /interruptions/<id>/answers` 200 in the log, interruption `answered`),
+then `GET /interruptions/next` 204 (queue empty) and an agents liveness sweep
+(`GET /agents`). HONEST GAP: run 2's own companion-wait call was NOT directly
+observed - its output was eaten by the ~1 min run retention (404), and the
+run's terminal session had lost the `COMPANIOND_URL` export (fresh shell per
+terminal call), so any wait it ran pointed at the DEFAULT daemon. Fixed the
+skill (Setup: re-export env in EVERY terminal call / prefix with `env`) and
+proved the wait directly on a fresh session: run acc-comp-2 ran
+`scripts/companion-wait --max 20` against 7792 - companiond log shows the full
+poll cycle (`GET /interruptions/next` 204 + `GET /events` 200 every 2 s,
+~20 s) - and reported verbatim:
+
+    {"wake":"timeout"}
+
+(iii) wake while waiting: with run acc-comp-4 inside its wait, a new
+interruption was created via capi (`db-migration-2`). The run woke,
+`GET /interruptions/next` returned it (status `presented`), the run COMPLETED
+and its output contained the script's JSON verbatim plus the presentation:
+
+    {"wake":"interruption","interruption":{...db-migration-2, status:"presented"...}}
+
+    Woken by a pending decision: a DB migration is awaiting your green light
+    (suggestions: 1) Run it (recommended), 2) Postpone). ...
+
+Failure modes found and FIXED during the session-driven work:
+
+1. Fresh shell per terminal call loses exports -> a wait silently targeted the
+   wrong daemon. Skill now requires re-exporting in every terminal call.
+2. The command scanner flagged `"$COMPANION_HOME/scripts/companion-wait"`
+   (variable executable body) -> run stuck in `waiting_for_approval`, which
+   `runs.sh status` reports as `unknown`. Unstuck with
+   `POST /v1/runs/{id}/approval {"choice":"once"}`; skill/harness now pin the
+   bare literal `scripts/companion-wait` after a PATH export.
+3. Run retention: a terminal run 404s within ~1 min - poll `status` at <= 5 s
+   and capture `output` immediately, or it is gone (bit us three times).
+
+Cleanup actually run on this host: `scripts/hermes/install.sh --uninstall-wake`
+- removed the Hermes route `companion-wake` (verified via `hermes webhook
+list`: "No dynamic webhook subscriptions"), disabled the companion profile's
+webhook-platform toolsets; companiond had no `companion-wake` subscription
+(`GET /subscriptions` empty) - nothing to delete. No gateway restart was
+performed (none needed: the route is removed at runtime; restart only if
+runs are in flight when removing it).
 
 ## 7. Human checklist (Telegram)
 
-1. The bot chat is live (you already messaged it). Two wake-test
-   interruptions (`wake-final`, `wake-final-2`, topic prefix `wake-`) are
-   awaiting your confirmation that the delivered message arrived - answer
-   them in Telegram or dismiss via `capi POST /interruptions/{id}/dismiss`.
+1. Open the Telegram chat (or a CLI session with the companion profile) and
+   say 'start'. The companion pulls the next interruption and presents it.
 2. From now on: reply to presented interruptions in Telegram (`1`,
    `1 + comment`, free text, or `details`); the companion reconciles against
-   the API.
-3. When switching companiond to production (default 127.0.0.1:7777), re-run
-   `scripts/hermes/install.sh` so the route prompt and subscription point at
-   the new URL.
-4. If a wake-up message ever looks like an apology, check:
-   `hermes -p companion tools list --platform webhook` (terminal/file/skills/
-   delegation enabled?) and the agent log for approval escalations.
+   the API. When idle it blocks in `scripts/companion-wait --max 240`; a
+   message during that wait interrupts it.
+3. If the companion seems stuck while waiting, check its
+   `COMPANIOND_URL`/`COMPANION_HOME` exports (fresh shell per terminal call)
+   and, for gateway runs, `GET /v1/runs/{id}` for a `waiting_for_approval`
+   approval block (see the harness doc's approval gate).

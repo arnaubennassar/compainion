@@ -1,5 +1,9 @@
 # Hermes gateway spike (Amendment 1, task A1)
 
+> NOTE (2026-10-06): the webhook wake-up path from Amendment 1 was DROPPED -
+> the companion is session-driven (`scripts/companion-wait` + user messages).
+> History below; see docs/live-acceptance.md "Session-driven loop".
+
 Date: 2026-10-06. Gateway: Hermes 0.21.5, multiplex_profiles=true (profiles:
 `default`, `companion`). API server on 127.0.0.1:8642, webhook platform on
 127.0.0.1:8644 (restricted — see Host binding). All commands below were run for
