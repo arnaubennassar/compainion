@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# capi - minimal REST client for the companion daemon (compainion).
+# Usage: capi METHOD PATH [JSON|@file]
+# Reads COMPANIOND_URL (default http://127.0.0.1:7777).
+# Adds Content-Type: application/json, an Idempotency-Key on POST
+# (${CAPI_KEY:-$(date +%s%N)-$RANDOM}) and If-Match from $CAPI_IF_MATCH if set.
+# Prints the response body to stdout. On HTTP >= 400 prints the problem JSON
+# to stderr and exits 22.
+set -euo pipefail
+
+BASE="${COMPANIOND_URL:-http://127.0.0.1:7777}"
+
+if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+  echo "usage: capi METHOD PATH [JSON|@file]"
+  echo "  METHOD  GET|POST|PATCH|DELETE"
+  echo "  PATH    e.g. /healthz or /plans/{id}/approve"
+  echo "  JSON    request body, inline JSON or @file to read from file"
+  echo "env: COMPANIOND_URL, CAPI_KEY, CAPI_IF_MATCH"
+  exit 0
+fi
+
+if [ $# -lt 2 ]; then
+  echo "capi: usage: capi METHOD PATH [JSON|@file]" >&2
+  exit 2
+fi
+
+m="$1"; p="$2"; body="${3:-}"
+
+args=(-sS -X "$m" "$BASE$p" -H 'Content-Type: application/json' -o "$TMPDIR/capi.$$" -w '%{http_code}')
+
+if [ "$m" = "POST" ]; then
+  args+=(-H "Idempotency-Key: ${CAPI_KEY:-$(date +%s%N)-$RANDOM}")
+fi
+if [ -n "${CAPI_IF_MATCH:-}" ]; then
+  args+=(-H "If-Match: \"$CAPI_IF_MATCH\"")
+fi
+if [ -n "$body" ]; then
+  case "$body" in
+    @*) args+=(--data-binary "@${body#@}") ;;
+    *)  args+=(--data-binary "$body") ;;
+  esac
+fi
+
+code=$(curl "${args[@]}")
+if [ "$code" -ge 400 ]; then
+  cat "$TMPDIR/capi.$$" >&2
+  rm -f "$TMPDIR/capi.$$"
+  exit 22
+fi
+cat "$TMPDIR/capi.$$"
+rm -f "$TMPDIR/capi.$$"

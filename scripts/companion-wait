@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+# companion-wait - block until the companion has something to present.
+#
+#   companion-wait [--max SECONDS] [--interval SECONDS]
+#     --max      give up after this many seconds, print {"wake":"timeout"} (default 240)
+#     --interval poll interval in seconds (default 2)
+#
+# Prints ONE line of JSON and exits 0:
+#   {"wake":"interruption","interruption":{...}}  - an open interruption was picked up
+#   {"wake":"events","events":[...]}              - wake-worthy events arrived
+#   {"wake":"timeout"}                            - nothing happened within --max
+#
+# Wake-worthy events: type in (finished, error, needs_input), or type=note with
+# payload.kind in (agent_waiting, agent_lost). Events authored by the companion
+# agent itself are ignored when COMPANION_AGENT_ID is set.
+#
+# Event cursor: ${XDG_STATE_HOME:-$HOME/.local/state}/companion/cursor. On the
+# first run it is initialised to the latest event id, so history does not wake
+# the companion; it is advanced after each events wake.
+#
+# Env: COMPANIOND_URL (default http://127.0.0.1:7777), COMPANION_AGENT_ID (optional).
+set -euo pipefail
+
+BASE="${COMPANIOND_URL:-http://127.0.0.1:7777}"
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/companion"
+CURSOR_FILE="$STATE_DIR/cursor"
+MAX=240
+INTERVAL=2
+
+usage() {
+  echo "usage: companion-wait [--max SECONDS] [--interval SECONDS]" >&2
+}
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --max) [[ $# -ge 2 ]] || { usage; exit 2; }; MAX="$2"; shift 2 ;;
+    --interval) [[ $# -ge 2 ]] || { usage; exit 2; }; INTERVAL="$2"; shift 2 ;;
+    -h|--help) usage; exit 0 ;;
+    *) usage; exit 2 ;;
+  esac
+done
+[[ "$MAX" =~ ^[0-9]+$ && "$INTERVAL" =~ ^[0-9]+$ ]] || { usage; exit 2; }
+
+tmp="$(mktemp)"
+trap 'rm -f "$tmp"' EXIT
+
+events_url() { # $1 = cursor ("" = from the beginning)
+  if [[ -n "$1" ]]; then
+    printf '%s/events?since=%s&limit=100' "$BASE" "$1"
+  else
+    printf '%s/events?limit=100' "$BASE"
+  fi
+}
+
+# init_cursor: on first run store the latest event id so history stays silent.
+init_cursor() {
+  mkdir -p "$STATE_DIR"
+  [[ -e "$CURSOR_FILE" ]] && return 0
+  local cursor="" body count
+  # Ascending order, 100/page: walk pages until one is short; its next_cursor
+  # is the latest event id.
+  while :; do
+    body="$(curl -fsS "$(events_url "$cursor")")"
+    count="$(jq '.items | length' <<<"$body")"
+    cursor="$(jq -r '.next_cursor // empty' <<<"$body")"
+    [[ -z "$cursor" || "$count" -lt 100 ]] && break
+  done
+  printf '%s' "$cursor" > "$CURSOR_FILE"
+}
+
+emit_timeout() { printf '{"wake":"timeout"}\n'; }
+
+init_cursor
+cursor="$(cat "$CURSOR_FILE" 2>/dev/null || true)"
+deadline=$(( $(date +%s) + MAX ))
+
+while :; do
+  # 1. Open interruption? (200 -> present it)
+  code="$(curl -sS -o "$tmp" -w '%{http_code}' "$BASE/interruptions/next")" || code=0
+  if [[ "$code" == "200" ]]; then
+    jq -cn --slurpfile d "$tmp" '{wake:"interruption", interruption:$d[0]}'
+    exit 0
+  fi
+
+  # 2. Wake-worthy events since the cursor?
+  body="$(curl -fsS "$(events_url "$cursor")")"
+  mapfile -t hits < <(jq -r --arg self "${COMPANION_AGENT_ID:-}" '
+    .items[]
+    | select(
+        (.type == "finished" or .type == "error" or .type == "needs_input")
+        or (.type == "note" and ((.payload.kind? // "") == "agent_waiting" or (.payload.kind? // "") == "agent_lost"))
+      )
+    | select($self == "" or (.agent_id? // "") != $self)
+    | tojson' <<<"$body")
+  next_cursor="$(jq -r '.next_cursor // empty' <<<"$body")"
+  if (( ${#hits[@]} > 0 )); then
+    printf '%s' "$next_cursor" > "$CURSOR_FILE"
+    jq -c '{wake:"events", events:[.[]]}' <<<"[$(printf '%s,' "${hits[@]}" | sed 's/,$//')]"
+    exit 0
+  fi
+  if [[ -n "$next_cursor" && "$next_cursor" != "$cursor" ]]; then
+    # page fully consumed (no hits): advance silently so old pages are not re-read
+    printf '%s' "$next_cursor" > "$CURSOR_FILE"
+    cursor="$next_cursor"
+  fi
+
+  # 3. Deadline?
+  now="$(date +%s)"
+  if (( now >= deadline )); then
+    emit_timeout
+    exit 0
+  fi
+  sleep_for="$INTERVAL"
+  remaining=$(( deadline - now ))
+  (( remaining < sleep_for )) && sleep_for="$remaining"
+  sleep "$sleep_for"
+done
