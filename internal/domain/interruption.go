@@ -20,14 +20,14 @@ type Question struct {
 }
 
 type Interruption struct {
-	ID        string    `json:"id"`
-	Topic     string    `json:"topic"`
-	Kind      string    `json:"kind"`
-	Priority  string    `json:"priority"`
-	Digest    string    `json:"digest"`
-	Blocking  bool      `json:"blocking"`
-	Status    string    `json:"status"`
-	CreatedAt string    `json:"created_at"`
+	ID        string     `json:"id"`
+	Topic     string     `json:"topic"`
+	Kind      string     `json:"kind"`
+	Priority  string     `json:"priority"`
+	Digest    string     `json:"digest"`
+	Blocking  bool       `json:"blocking"`
+	Status    string     `json:"status"`
+	CreatedAt string     `json:"created_at"`
 	Questions []Question `json:"questions,omitempty"`
 }
 

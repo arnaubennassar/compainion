@@ -24,5 +24,3 @@ func Fingerprint(category, location, title string) string {
 	h := sha1.Sum([]byte(category + "|" + loc + "|" + title))
 	return hex.EncodeToString(h[:])[:16]
 }
-
-
