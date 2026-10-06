@@ -32,6 +32,14 @@ func (w *loggingResponseWriter) Write(b []byte) (int, error) {
 	return w.ResponseWriter.Write(b)
 }
 
+// Flush forwards to the wrapped writer so streaming handlers (SSE) can flush
+// through the logging wrapper.
+func (w *loggingResponseWriter) Flush() {
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
 // logRequests logs method, path, status and duration for every request.
 func (s *Server) logRequests(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -113,6 +121,14 @@ func (s *Server) idempotency(next http.Handler) http.Handler {
 	})
 }
 
+// Flush forwards to the wrapped writer so streaming handlers can flush
+// through the idempotency wrapper too.
+func (w *idempotencyResponseWriter) Flush() {
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
 // idempotencyResponseWriter buffers the response so it can be cached and
 // replayed for later identical requests.
 type idempotencyResponseWriter struct {
@@ -145,4 +161,3 @@ func isNotFoundErr(err error) bool {
 	var de *domain.Error
 	return errors.As(err, &de) && de.Kind == domain.NotFound
 }
-

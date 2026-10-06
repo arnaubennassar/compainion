@@ -31,6 +31,17 @@ func NewWithLogger(db *store.DB, log *slog.Logger) *Server {
 	}
 	s := &Server{db: db, log: log, mux: http.NewServeMux()}
 	s.handle("GET /healthz", s.healthz)
+	s.registerPlans()
+	s.registerSteps()
+	s.registerTasks()
+	s.registerWorkstreams()
+	s.registerAgents()
+	s.registerEvents()
+	s.registerSubscriptions()
+	s.registerOpenapi()
+	s.registerStream()
+	s.registerInterruptions()
+	s.registerFindings()
 	s.handle("/", func(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, domain.Errf(domain.NotFound, "no route for %s %s", r.Method, r.URL.Path))
 	})
