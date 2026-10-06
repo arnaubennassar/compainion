@@ -3,7 +3,6 @@ package domain
 import (
 	"crypto/sha1"
 	"encoding/hex"
-	"fmt"
 	"regexp"
 	"strings"
 )
@@ -26,4 +25,4 @@ func Fingerprint(category, location, title string) string {
 	return hex.EncodeToString(h[:])[:16]
 }
 
-var _ = fmt.Sprintf // keep fmt available for future Errf use
+
