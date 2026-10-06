@@ -20,6 +20,12 @@ your context. Context may be cleared at any moment - nothing may live only in co
 - Spawning/status/resume/output of workers is done with
   `scripts/hermes/runs.sh` - see `harnesses/hermes.md` for the four operations
   (`spawn`, `status`, `resume`, `output`).
+- Each spawn/resume runs under a ROLE that picks the model: `worker` =
+  openrouter / z-ai/glm-5.3-flash (cheap), `planner` (skill `create-plan`) =
+  anthropic / claude-opus-5-5, `orchestrator` (skill `execute-plan`) =
+  anthropic / claude-sonnet-5-5. `runs.sh` infers the role from the skills
+  list; pass `--role` only to override. Never run workers on the profile
+  default model (claude-opus - expensive).
 
 ## Startup
 
@@ -156,9 +162,9 @@ capi GET "/findings?query=logs"
 capi POST /findings/$FINDING_ID/resolve '{"resolution":"issue_opened","resolution_ref":"https://..."}'
 capi POST /findings/$FINDING_ID/surface '{"interruption_id":"$INTERRUPTION_ID"}'
 capi GET /events?since=$EVENT_ID&limit=100
-# Worker lifecycle (see harnesses/hermes.md):
-#   scripts/hermes/runs.sh spawn <name> <skills-csv> <prompt-file>
+# Worker lifecycle (see harnesses/hermes.md; role is inferred from skills):
+#   scripts/hermes/runs.sh spawn <name> <skills-csv> <prompt-file> [--role R]
 #   scripts/hermes/runs.sh status <run_id>
-#   scripts/hermes/runs.sh resume <session_id> <text|@file>
+#   scripts/hermes/runs.sh resume <session_id> <text|@file>   # reuses spawn role
 #   scripts/hermes/runs.sh output <run_id>
 ```

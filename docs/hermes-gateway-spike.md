@@ -231,3 +231,35 @@ hermes webhook subscribe companion-wake \
   gateway (Telegram is configured on `companion`).
 - `deliver_only` mode exists for zero-LLM literal notification, but the wake-up
   route must run the agent, so it does not apply.
+## Re-run with provider (2026-10-06, later same day)
+
+The user added `API_SERVER_KEY` to `~/.hermes/profiles/companion/.env`, so
+runs now execute on the companion profile
+(`HERMES_API_URL=http://127.0.0.1:8642/p/companion`; runs.sh was switched to
+this default). The former BLOCKER is resolved.
+
+### (b) Context continuity — VERIFIED
+
+- Run 1: `runs.sh spawn spike-memory '' <prompt>` with input "remember the code
+  word is MANGO" -> completed, output `ok`.
+- Run 2: `runs.sh resume spike-memory "What was the code word?"` (same
+  session_id, no conversation_history/previous_response_id) -> completed,
+  output `MANGO`.
+
+Same-`session_id` runs DO inherit full context. No `previous_response_id`
+chaining needed; `runs.sh resume` works as designed (harness doc section 3 is
+confirmed, the "unverified" limitation is removed).
+
+### (c) Tool use, cwd instruction, timing — VERIFIED
+
+companiond started on 127.0.0.1:7788 (throwaway DB). Run spawned with the
+`execute-task` skill embedded in `instructions` and a prompt: `cd` into a
+fresh `git init`-ed temp repo, run `curl -s http://127.0.0.1:7788/healthz`,
+report pwd/curl output/shell access.
+
+- The run executed real shell commands: `pwd` showed the temp git repo
+  (the `cd` instruction was honoured) and curl returned
+  `{"status":"ok"}` (companiond reachable).
+- Wall time spawn->completed: ~10 s.
+- Runtime cwd starts in the Hermes scratch dir; the worker must be told to
+  `cd` explicitly (as the harness doc already prescribes for worktrees).

@@ -33,9 +33,12 @@ mirrors to the chat session) → the companion runs
 reconciled against `GET /interruptions?status=presented`.
 
 Worker lifecycle (spawn / status / resume / output) goes through
-`scripts/hermes/runs.sh`; see `skills/companion/harnesses/hermes.md` for the
-full harness contract (registration order, waiting/lost semantics, Telegram
-presentation rules, limitations).
+`scripts/hermes/runs.sh`; workers run on the companion profile with per-role
+models (`worker` = openrouter/z-ai-glm-5.3-flash, `planner` = anthropic
+claude-opus-5-5, `orchestrator` = anthropic claude-sonnet-5-5; the role is
+inferred from the skills list). See `skills/companion/harnesses/hermes.md` for
+the full harness contract (registration order, waiting/lost semantics, approval
+gate, Telegram presentation rules, limitations).
 
 ## Layout
 

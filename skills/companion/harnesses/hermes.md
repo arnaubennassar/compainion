@@ -33,15 +33,19 @@ Registration order (companiond is the source of truth, so register BEFORE the
 run can report anything):
 
 1. Write the prompt file.
-2. Register the agent, holding the handle JSON:
-   `capi POST /agents '{"id":"'"$name"'","role":"worker","harness":"hermes","status":"starting","handle":'"$handle"',"workstream_id":"$WS"}'`
+2. Register the agent WITHOUT the handle (you cannot have it yet — it only
+   exists after the spawn):
+   `capi POST /agents '{"id":"'"$name"'","role":"worker","harness":"hermes","status":"starting","workstream_id":"$WS"}'`
    (supply the `id` — it must equal `<name>`, the run's `session_id` — so
-   registration is idempotent and the handle round-trips).
-3. Spawn the run (`runs.sh spawn`, above). If it returns a different `run_id`
-   than you expected (e.g. after a retry), PATCH the handle:
-   `capi PATCH /agents/$AGENT_ID --header "If-Match: $etag" -d '{"handle":'"$new_handle"'}'`
-4. `capi PATCH /agents/$AGENT_ID '{"status":"running"}'` (with If-Match) once
-   `runs.sh status` reports `running`.
+   registration is idempotent).
+3. Spawn the run (`runs.sh spawn`, above) and PATCH the handle onto the agent:
+   `capi PATCH /agents/$AGENT_ID -d '{"handle":'$handle'}'`.
+   Note: `GET /agents/{id}` carries NO `ETag` — PATCH agents without `If-Match`
+   (If-Match applies to tasks/plans/steps only).
+4. `capi PATCH /agents/$AGENT_ID '{"status":"running"}'` once `runs.sh status`
+   reports `running`. Do this early: a fast worker may finish and PATCH itself
+   `finished` first, and your late PATCH then 409s (invalid transition) — that
+   is harmless, just do not retry it.
 
 Names/ids: agent id = run `session_id` = the spawn `<name>` (one stable id per
 worker; respawns reuse it — see "Lost workers" below). `run_id` identifies one
@@ -97,12 +101,22 @@ them everything in the prompt.
 
 ## Role-to-skill table
 
-| Role | Skill passed to `runs.sh spawn` | Notes |
-|---|---|---|
-| `worker` | `execute-task` | one task or one step |
-| `orchestrator` | `execute-plan` | executes an approved plan step by step |
-| `create-plan` worker | `create-plan` | drafts a plan; never executes |
-| digest worker | `execute-task` (read-only usage) | status questions, "details" lookups; must not mutate |
+`runs.sh spawn` accepts `[--role worker|planner|orchestrator]`; without it the
+role is inferred from the skills list (create-plan => planner, execute-plan =>
+orchestrator, otherwise worker). The role selects the per-run model/provider
+(sent on every spawn AND resume; resume reuses the spawn's persisted role):
+
+| Role | Skill passed to `runs.sh spawn` | Model/provider (per run) | Notes |
+|---|---|---|---|
+| `worker` | `execute-task` | openrouter / z-ai/glm-5.3-flash | one task or one step |
+| `orchestrator` | `execute-plan` | anthropic / claude-sonnet-5-5 | executes an approved plan step by step |
+| `planner` | `create-plan` | anthropic / claude-opus-5-5 | drafts a plan; never executes |
+| digest worker | `execute-task` (read-only usage) | as worker | status questions, "details" lookups; must not mutate |
+
+Env overrides: `HERMES_{WORKER,PLANNER,ORCHESTRATOR}_{MODEL,PROVIDER}` (empty
+value = omit the field). Reasoning effort CANNOT be set per run: the Runs API
+ignores `reasoning_effort`/`reasoning` body fields and `runtime.requested`
+carries only provider+model - configure reasoning in the profile instead.
 
 ## Code-editing workers
 
@@ -139,24 +153,39 @@ numbered suggestions with the recommended one first and labelled, accepted
 replies `1`, `1 + comment`, free text, or `details` (never answered inline —
 spawn a read-only worker and re-present with a one-paragraph summary).
 
+## Approval gate (live-verified)
+
+A worker's shell commands pass the gateway's command security scanner. Benign
+capi sequences using shell variables (`C=$COMPANION_HOME/scripts/capi; $C ...`)
+were flagged as "nested executable body could not be resolved" and the run
+moved to `waiting_for_approval`. The run status payload then carries an
+`approval` object (`request_id`, `command`, `choices: [once, session, deny]`).
+Answer it with:
+`POST /v1/runs/{run_id}/approval {"choice":"once"}` (field is `choice`, not
+`decision`; `session` approves for the rest of the run). The run then continues
+to completion on its own. Prefer writing plain `scripts/capi ...` commands in
+worker prompts to avoid the flag.
+
 ## Known limitations / unverified items (from the gateway spike)
 
-- **Session continuity across runs is unverified**: same-`session_id` runs are
-  accepted but their context inheritance could not be proven live (no LLM
-  provider credentials on the host at spike time). If resume turns out not to
-  inherit context, fall back to `previous_response_id` chaining (a completed
-  run's status payload carries the response identity) and add it to runs.sh.
-- **Companion-profile Runs API needs its own key**: plain `/v1/runs` runs on
-  the default profile. To run workers AS the companion profile, the user must
-  add `API_SERVER_ENABLED`/`API_SERVER_KEY` to
-  `~/.hermes/profiles/companion/.env` and use
-  `HERMES_API_URL=http://127.0.0.1:8642/p/companion` with that key. Until then
-  workers run on the default profile.
+- ~~Session continuity across runs~~ VERIFIED (2026-10-06): same-`session_id`
+  runs inherit full context; `resume` works as designed. No
+  `previous_response_id` chaining needed.
+- ~~Companion-profile Runs API needs its own key~~ DONE: `runs.sh` defaults to
+  `http://127.0.0.1:8642/p/companion` and reads `API_SERVER_KEY` from
+  `~/.hermes/profiles/companion/.env`. Workers run AS the companion profile
+  with that profile's provider credentials, and runs.sh overrides
+  model/provider per run (see role table above).
 - `skills`, `cwd`/`working_dir` and `profile` fields in `POST /v1/runs` bodies
-  are tolerated at submit time but their runtime effect is unverified; the
-  guaranteed skill mechanism is embedding skill bodies into `instructions`
-  (what `runs.sh spawn` does) and the route-level `--skills` list.
-- Runs are retained only briefly after a terminal state; status may become
-  `unknown` after retention or a gateway restart (that is what `lost` covers).
+  are tolerated at submit time but their runtime effect is unverified (the
+  worker starts in the gateway scratch dir — instruct workers to `cd` where
+  they must work); the guaranteed skill mechanism is embedding skill bodies
+  into `instructions` (what `runs.sh spawn` does) and the route-level
+  `--skills` list. Tool use (shell, curl) and `cd` into a target repo are
+  LIVE-VERIFIED.
+- Runs are retained only VERY briefly after a terminal state (observed: a
+  completed run 404s within ~1 minute). Capture `runs.sh output` immediately
+  after completion; treat later `status` 404 as `unknown` after retention or a
+  gateway restart (that is what `lost` covers).
 - `POST /v1/runs` returns 202-style accepted and runs asynchronously; use
   `runs.sh status` / `runs.sh output`, or SSE at `GET /v1/runs/{id}/events`.
