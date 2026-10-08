@@ -205,6 +205,8 @@ capi POST /interruptions/$INTERRUPTION_ID/answers '{"question_id":"$QUESTION_ID"
 capi POST /interruptions '{"topic":"plan-approval","kind":"approval","priority":"high","digest":"Plan X needs approval.","blocking":true,"questions":[{"position":1,"text":"Approve the plan?","answer_type":"confirm","suggestions":[{"label":"Approve","recommended":true},{"label":"Revise first"}]}]}'
 capi POST /interruptions/$INTERRUPTION_ID/dismiss
 capi POST /interruptions/$INTERRUPTION_ID/reopen
+capi POST /interruptions '{"topic":"credentials","kind":"decision","priority":"high","digest":"Need the Grafana URL + token.","blocking":true,"questions":[{"position":1,"text":"Provide the Grafana URL + service account token.","answer_type":"free_text"}]}'
+# free_text questions MAY omit suggestions; choice/multi_choice/confirm REQUIRE >= 1. answer_type "free" is NOT an enum value - use "free_text".
 capi POST /tasks '{"workstream_id":"$WORKSTREAM_ID","requested_by":"$AGENT_ID","title":"Bump deps","description":"...","acceptance_criteria":"tests pass","added_by":"user"}'
 capi GET /tasks/$TASK_ID
 capi POST /agents/$AGENT_ID/events '{"type":"steer","payload":{"text":"continue","reason":"unblocked, not polling"}}'
