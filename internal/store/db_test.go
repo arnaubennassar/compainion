@@ -14,8 +14,8 @@ func TestOpenMemory(t *testing.T) {
 		t.Fatalf("Open(:memory:) = %v", err)
 	}
 	defer db.Close()
-	if db.SchemaVersion() != 1 {
-		t.Errorf("schema version = %d, want 1", db.SchemaVersion())
+	if db.SchemaVersion() != 2 {
+		t.Errorf("schema version = %d, want 2", db.SchemaVersion())
 	}
 }
 
@@ -31,8 +31,8 @@ func TestOpenIdempotentMigrations(t *testing.T) {
 		t.Fatalf("second Open = %v", err)
 	}
 	defer db2.Close()
-	if db2.SchemaVersion() != 1 {
-		t.Errorf("schema version = %d, want 1", db2.SchemaVersion())
+	if db2.SchemaVersion() != 2 {
+		t.Errorf("schema version = %d, want 2", db2.SchemaVersion())
 	}
 }
 

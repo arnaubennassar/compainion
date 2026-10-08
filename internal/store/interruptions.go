@@ -10,6 +10,7 @@ import (
 	"database/sql"
 	"fmt"
 	"sort"
+	"time"
 
 	"github.com/arnaubennassar/compainion/internal/domain"
 	"github.com/arnaubennassar/compainion/internal/ids"
@@ -23,7 +24,7 @@ type rowQuerier interface {
 }
 
 const interruptionCols = `id, workstream_id, raised_by_agent_id, plan_id, step_id, task_id,
-	topic, kind, priority, digest, blocking, status, answered_at, created_at, updated_at`
+	topic, kind, priority, digest, blocking, status, answered_at, expires_at, default_action, created_at, updated_at`
 
 func scanInterruption(r interface{ Scan(...any) error }) (Interruption, error) {
 	var it Interruption
@@ -31,7 +32,7 @@ func scanInterruption(r interface{ Scan(...any) error }) (Interruption, error) {
 	var blocking int
 	if err := r.Scan(&it.ID, &ws, &raised, &plan, &step, &task,
 		&it.Topic, &it.Kind, &it.Priority, &it.Digest, &blocking, &it.Status,
-		&answered, &it.CreatedAt, &it.UpdatedAt); err != nil {
+		&answered, &it.ExpiresAt, &it.DefaultAction, &it.CreatedAt, &it.UpdatedAt); err != nil {
 		return Interruption{}, err
 	}
 	it.WorkstreamID, it.RaisedByAgentID, it.PlanID, it.StepID, it.TaskID = ws.String, raised.String, strPtr(plan), strPtr(step), strPtr(task)
@@ -179,6 +180,22 @@ func (d *DB) CreateInterruption(ctx context.Context, it Interruption) (Interrupt
 	if it.Status == "" {
 		it.Status = "open"
 	}
+	// Timeout policy: default_action defaults to pause for worker approval
+	// gates (never auto-approve) and escalate for user-facing kinds, which
+	// must not silently expire.
+	if it.DefaultAction == "" {
+		it.DefaultAction = domain.DefaultExpiryAction(it.Kind)
+	}
+	if err := domain.ValidateDefaultAction(it.DefaultAction); err != nil {
+		return Interruption{}, err
+	}
+	if it.ExpiresAt != "" {
+		if _, err := time.Parse(time.RFC3339, it.ExpiresAt); err != nil {
+			return Interruption{}, domain.Errf(domain.Invalid, "expires_at must be an RFC3339 timestamp")
+		}
+		// UTC RFC3339 timestamps compare lexically, which is how the
+		// expiry query matches lapsed rows.
+	}
 	// Validate through the domain rules; they auto-assign positions 0..n-1.
 	dqs := make([]domain.Question, len(it.Questions))
 	for i, q := range it.Questions {
@@ -196,10 +213,10 @@ func (d *DB) CreateInterruption(ctx context.Context, it Interruption) (Interrupt
 	it.ID = ids.New()
 	n := now()
 	err := d.WithTx(ctx, func(tx *sql.Tx) error {
-		if _, err := tx.Exec(`INSERT INTO interruptions (id, workstream_id, raised_by_agent_id, plan_id, step_id, task_id, topic, kind, priority, digest, blocking, status, answered_at, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
+		if _, err := tx.Exec(`INSERT INTO interruptions (id, workstream_id, raised_by_agent_id, plan_id, step_id, task_id, topic, kind, priority, digest, blocking, status, answered_at, expires_at, default_action, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)`,
 			it.ID, nullStr(it.WorkstreamID), nullStr(it.RaisedByAgentID), nullStr(ptrStr(it.PlanID)), nullStr(ptrStr(it.StepID)), nullStr(ptrStr(it.TaskID)),
-			it.Topic, it.Kind, it.Priority, it.Digest, boolInt(it.Blocking), it.Status, n, n); err != nil {
+			it.Topic, it.Kind, it.Priority, it.Digest, boolInt(it.Blocking), it.Status, it.ExpiresAt, it.DefaultAction, n, n); err != nil {
 			return fmt.Errorf("store: create interruption: %w", err)
 		}
 		for _, q := range it.Questions {
@@ -505,6 +522,85 @@ func transitionInterruption(ctx context.Context, d *DB, id string, from []string
 		return fmt.Errorf("store: transition interruption: %w", err)
 	}
 	return nil
+}
+
+// ExpireLapsedInterruptions enforces the timeout policy on every open or
+// presented interruption whose expires_at has passed:
+//   - default_action pause: closed with status 'expired' without approving
+//     anything (the worker resumes when re-engaged);
+//   - deny: closed with status 'expired' (treated as a refusal);
+//   - escalate: NEVER closed silently - priority is bumped to urgent and an
+//     event notifies the raising agent; the interruption stays open.
+//
+// It returns the ids it touched, in id order. now is an RFC3339 UTC instant
+// compared lexically against the stored expires_at.
+func (d *DB) ExpireLapsedInterruptions(ctx context.Context, nowRFC3339 string) ([]string, error) {
+	rows, err := d.QueryContext(ctx,
+		`SELECT id, default_action FROM interruptions
+		 WHERE expires_at != '' AND expires_at <= ? AND status IN ('open','presented')`, nowRFC3339)
+	if err != nil {
+		return nil, fmt.Errorf("store: list lapsed interruptions: %w", err)
+	}
+	defer rows.Close()
+	type lapsed struct {
+		id     string
+		action string
+	}
+	var due []lapsed
+	for rows.Next() {
+		var l lapsed
+		if err := rows.Scan(&l.id, &l.action); err != nil {
+			return nil, err
+		}
+		due = append(due, l)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	var touched []string
+	for _, l := range due {
+		var err error
+		switch l.action {
+		case domain.ExpiryPause, domain.ExpiryDeny:
+			err = d.WithTx(ctx, func(tx *sql.Tx) error {
+				// Close open questions too: the gate is closed, not answered
+				// (no auto-approval is ever recorded).
+				if _, err := tx.Exec(`UPDATE questions SET status = 'skipped', updated_at = ? WHERE interruption_id = ? AND status NOT IN ('answered','skipped')`, now(), l.id); err != nil {
+					return err
+				}
+				if _, err := tx.Exec(`UPDATE interruptions SET status = 'expired', answered_at = ?, updated_at = ? WHERE id = ? AND status IN ('open','presented')`, now(), now(), l.id); err != nil {
+					return err
+				}
+				var raisedBy string
+				if err := tx.QueryRowContext(ctx, `SELECT COALESCE(raised_by_agent_id, '') FROM interruptions WHERE id = ?`, l.id).Scan(&raisedBy); err != nil {
+					return err
+				}
+				payload := fmt.Sprintf(`{"kind":"interruption_expired","interruption_id":%q,"action":%q}`, l.id, l.action)
+				_, err := AppendEventTx(tx, Event{AgentID: raisedBy, Type: "note", Payload: payload})
+				return err
+			})
+		case domain.ExpiryEscalate:
+			err = d.WithTx(ctx, func(tx *sql.Tx) error {
+				// Prevent repeated escalation on every sweep: only bump the
+				// first time the interruption lapses past its expiry.
+				if _, err := tx.Exec(`UPDATE interruptions SET priority = 'urgent', expires_at = '', updated_at = ? WHERE id = ? AND status IN ('open','presented')`, now(), l.id); err != nil {
+					return err
+				}
+				var raisedBy string
+				if err := tx.QueryRowContext(ctx, `SELECT COALESCE(raised_by_agent_id, '') FROM interruptions WHERE id = ?`, l.id).Scan(&raisedBy); err != nil {
+					return err
+				}
+				payload := fmt.Sprintf(`{"kind":"interruption_escalated","interruption_id":%q}`, l.id)
+				_, err := AppendEventTx(tx, Event{AgentID: raisedBy, Type: "note", Payload: payload})
+				return err
+			})
+		}
+		if err != nil {
+			return touched, fmt.Errorf("store: expire interruption %s: %w", l.id, err)
+		}
+		touched = append(touched, l.id)
+	}
+	return touched, nil
 }
 
 // DeleteInterruption removes an interruption and its questions, suggestions

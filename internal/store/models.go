@@ -109,6 +109,8 @@ type Interruption struct {
 	Blocking        bool       `json:"blocking"`
 	Status          string     `json:"status"`
 	AnsweredAt      *string    `json:"answered_at,omitempty"`
+	ExpiresAt       string     `json:"expires_at,omitempty"`
+	DefaultAction   string     `json:"default_action,omitempty"`
 	CreatedAt       string     `json:"created_at"`
 	UpdatedAt       string     `json:"updated_at"`
 	Questions       []Question `json:"questions,omitempty"`
