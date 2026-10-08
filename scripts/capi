@@ -6,16 +6,25 @@
 # (${CAPI_KEY:-$(date +%s%N)-$RANDOM}) and If-Match from $CAPI_IF_MATCH if set.
 # Prints the response body to stdout. On HTTP >= 400 prints the problem JSON
 # to stderr and exits 22.
+#
+# Staleness guard for @file bodies (exits 23): concurrent workers used to reuse
+# the same scratch body file (e.g. body.json); when a worker's write was
+# refused, capi silently sent a PREVIOUS worker's stale body. capi therefore
+# refuses a @file body that is (a) missing, (b) last modified before this capi
+# process started, or (c) the same path with the same mtime used as a body
+# within CAPI_BODY_REUSE_WINDOW seconds (default 120). Rewrite the file (new
+# mtime) or use a unique per-task name (body-$TASK_ID-$NNN.json) to pass.
 set -euo pipefail
 
 BASE="${COMPANIOND_URL:-http://127.0.0.1:7777}"
+start=$(date +%s)
 
 if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
   echo "usage: capi METHOD PATH [JSON|@file]"
   echo "  METHOD  GET|POST|PATCH|DELETE"
   echo "  PATH    e.g. /healthz or /plans/{id}/approve"
   echo "  JSON    request body, inline JSON or @file to read from file"
-  echo "env: COMPANIOND_URL, CAPI_KEY, CAPI_IF_MATCH"
+  echo "env: COMPANIOND_URL, CAPI_KEY, CAPI_IF_MATCH, CAPI_BODY_REUSE_WINDOW"
   exit 0
 fi
 
@@ -25,6 +34,32 @@ if [ $# -lt 2 ]; then
 fi
 
 m="$1"; p="$2"; body="${3:-}"
+
+# Refuse stale / reused @file bodies (see header comment). Exit code 23.
+guard_body_file() {
+  local f="$1" mtime now rec recdir recfile
+  if [ ! -f "$f" ]; then
+    echo "capi: refusing @file body: file not found: $f" >&2
+    exit 23
+  fi
+  mtime=$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f")
+  now=$(date +%s)
+  if [ "$mtime" -lt "$start" ]; then
+    echo "capi: refusing STALE body file: $f (mtime $mtime predates this capi process, start $start). It likely holds another task's payload - write the body to a UNIQUE per-task file (e.g. body-\$TASK_ID-\$NNN.json) immediately before this call." >&2
+    exit 23
+  fi
+  recdir="${TMPDIR:-/tmp}/capi-bodyguard"
+  mkdir -p "$recdir"
+  recfile="$recdir/$(printf %s "$f" | cksum | awk '{print $1}')"
+  if [ -f "$recfile" ]; then
+    rec=$(cat "$recfile")
+    if [ "${rec%% *}" = "$mtime" ] && [ $((now - ${rec#* })) -lt "${CAPI_BODY_REUSE_WINDOW:-120}" ]; then
+      echo "capi: refusing body file reused within ${CAPI_BODY_REUSE_WINDOW:-120}s without modification: $f. Rewrite the body (fresh mtime) or use a unique per-task filename." >&2
+      exit 23
+    fi
+  fi
+  echo "$mtime $now" > "$recfile"
+}
 
 args=(-sS -X "$m" "$BASE$p" -H 'Content-Type: application/json' -o "$TMPDIR/capi.$$" -w '%{http_code}')
 
@@ -36,7 +71,7 @@ if [ -n "${CAPI_IF_MATCH:-}" ]; then
 fi
 if [ -n "$body" ]; then
   case "$body" in
-    @*) args+=(--data-binary "@${body#@}") ;;
+    @*) guard_body_file "${body#@}"; args+=(--data-binary "@${body#@}") ;;
     *)  args+=(--data-binary "$body") ;;
   esac
 fi
