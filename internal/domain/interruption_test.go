@@ -30,6 +30,18 @@ func TestValidateQuestionsNeedsSuggestion(t *testing.T) {
 	if err == nil {
 		t.Error("empty suggestions must be rejected")
 	}
+	// free_text questions are exempt: the plain text answer is the point.
+	for _, at := range []string{"choice", "confirm"} {
+		if err := ValidateQuestions([]Question{{Text: "q", AnswerType: at}}); err == nil {
+			t.Errorf("answer_type %q without suggestions must be rejected", at)
+		}
+	}
+	if err := ValidateQuestions([]Question{{Text: "q", AnswerType: "free_text"}}); err != nil {
+		t.Errorf("free_text without suggestions must be accepted, got %v", err)
+	}
+	if err := ValidateQuestions([]Question{{Text: "q", AnswerType: "free_text", Suggestions: []Suggestion{}}}); err != nil {
+		t.Errorf("free_text with empty suggestions must be accepted, got %v", err)
+	}
 }
 
 func TestValidateQuestionsOneRecommended(t *testing.T) {

@@ -111,6 +111,14 @@ func TestInterruptionCreate(t *testing.T) {
 			t.Fatalf("body is not problem+json: %s", res.Body)
 		}
 	})
+	t.Run("free_text question without suggestions is 201", func(t *testing.T) {
+		body := itBody("t3", "normal", false)
+		body["questions"] = []map[string]any{{"text": "What is the URL?", "answer_type": "free_text"}}
+		res := itDo(t, srv, "POST", "/interruptions", body, nil)
+		if res.Status != http.StatusCreated {
+			t.Fatalf("status = %d, want 201: %s", res.Status, res.Body)
+		}
+	})
 	t.Run("unknown fields rejected", func(t *testing.T) {
 		res := itDo(t, srv, "POST", "/interruptions", map[string]any{"nope": 1}, nil)
 		if res.Status != http.StatusBadRequest {

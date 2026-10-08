@@ -40,14 +40,15 @@ func validAnswerType(t string) bool {
 	return false
 }
 
-// ValidateQuestions checks the create-time rules: every question needs at
-// least one suggestion, at most one suggestion may be recommended per
-// question, answer_type must be in the enum, and positions must be unique.
-// Positions are auto-assigned 0..n-1 when omitted.
+// ValidateQuestions checks the create-time rules: at most one suggestion may
+// be recommended per question, answer_type must be in the enum, and positions
+// must be unique. Positions are auto-assigned 0..n-1 when omitted. Suggestions
+// are required EXCEPT for free_text questions, where a plain text answer is
+// the point and a suggestion list is optional.
 func ValidateQuestions(qs []Question) error {
 	for i := range qs {
 		q := &qs[i]
-		if len(q.Suggestions) == 0 {
+		if q.AnswerType != "free_text" && len(q.Suggestions) == 0 {
 			return Errf(Unprocessable, "question %d has no suggestions", q.Position)
 		}
 		rec := 0
