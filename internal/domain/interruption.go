@@ -90,6 +90,11 @@ func ValidateQuestions(qs []Question) error {
 
 var priorityRank = map[string]int{"urgent": 0, "high": 1, "normal": 2, "low": 3}
 
+// Expiry action. The timeout policy can only escalate urgency: an expired
+// interruption is never closed or decided on the user's behalf — it waits
+// until he answers.
+const ExpiryEscalate = "escalate"
+
 // Less orders interruptions for presentation: priority urgent < high <
 // normal < low; ties: blocking first; then older created_at (ULID compare).
 func Less(a, b Interruption) bool {

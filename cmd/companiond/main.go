@@ -49,6 +49,11 @@ func run() error {
 	defer cancel()
 	go (&notify.Dispatcher{DB: db, Logger: log}).Run(ctx)
 
+	// Interruption expiry enforcement: every 30s sweep lapsed
+	// interruptions; expiry escalates urgency only (bump to urgent + notify),
+	// never auto-closes a user decision. Runs until shutdown.
+	go expireLoop(ctx, db, log)
+
 	httpServer := &http.Server{
 		Addr:              cfg.Addr,
 		Handler:           srv.Handler(),
