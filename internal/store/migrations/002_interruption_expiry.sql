@@ -1,9 +1,8 @@
--- Interruption timeout policy: optional expires_at (RFC3339 UTC) and the
--- default action the daemon applies when the interruption lapses.
--- default_action semantics:
---   pause    -> close as expired, worker resumes later (worker approval gates)
---   deny     -> close as expired and treat the request as denied
---   escalate -> never silently expire: bump priority to urgent and persist
+-- Interruption timeout policy: optional expires_at (RFC3339 UTC) recorded as
+-- metadata. Expiry can only escalate urgency (bump priority to urgent once +
+-- notifying event); it never closes or decides the interruption — user
+-- decisions wait until answered. default_action is therefore fixed to
+-- 'escalate'.
 ALTER TABLE interruptions ADD COLUMN expires_at TEXT NOT NULL DEFAULT '';
-ALTER TABLE interruptions ADD COLUMN default_action TEXT NOT NULL DEFAULT 'pause'
-    CHECK (default_action IN ('pause','deny','escalate'));
+ALTER TABLE interruptions ADD COLUMN default_action TEXT NOT NULL DEFAULT 'escalate'
+    CHECK (default_action = 'escalate');

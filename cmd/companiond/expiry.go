@@ -1,14 +1,11 @@
 package main
 
 // expireLoop enforces the interruption timeout policy: every expiryPoll
-// interval it applies the default_action of lapsed interruptions
-// (expires_at passed, still open/presented).
-//
-//   - pause / deny: the interruption is closed with status 'expired' and a
-//     note event notifies the raising agent. Nothing is approved: a worker
-//     gate defaults to pause, never auto-approve.
-//   - escalate: user-facing decisions are NOT silently expired; the sweep
-//     bumps priority to urgent once and keeps the interruption open.
+// interval it sweeps lapsed interruptions (expires_at passed, still
+// open/presented). Expiry can only escalate urgency: priority is bumped to
+// urgent once and a notifying event is emitted for the raising agent. The
+// interruption is never closed or decided on the user's behalf — it waits
+// until he answers.
 //
 // Errors are logged, not fatal: the next tick retries (single-writer SQLite
 // keeps this loop cheap).

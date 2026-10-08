@@ -180,14 +180,15 @@ func (d *DB) CreateInterruption(ctx context.Context, it Interruption) (Interrupt
 	if it.Status == "" {
 		it.Status = "open"
 	}
-	// Timeout policy: default_action defaults to pause for worker approval
-	// gates (never auto-approve) and escalate for user-facing kinds, which
-	// must not silently expire.
+	// Timeout policy: user-facing interruptions wait until answered. The
+	// default_action metadata is fixed to escalate — expiry can only raise
+	// urgency, never close or decide the interruption.
 	if it.DefaultAction == "" {
-		it.DefaultAction = domain.DefaultExpiryAction(it.Kind)
+		it.DefaultAction = domain.ExpiryEscalate
 	}
-	if err := domain.ValidateDefaultAction(it.DefaultAction); err != nil {
-		return Interruption{}, err
+	if it.DefaultAction != domain.ExpiryEscalate {
+		return Interruption{}, domain.Errf(domain.Unprocessable,
+			"default_action must be %q: expiry only escalates urgency, it never auto-closes a decision", domain.ExpiryEscalate)
 	}
 	if it.ExpiresAt != "" {
 		if _, err := time.Parse(time.RFC3339, it.ExpiresAt); err != nil {
@@ -525,31 +526,29 @@ func transitionInterruption(ctx context.Context, d *DB, id string, from []string
 }
 
 // ExpireLapsedInterruptions enforces the timeout policy on every open or
-// presented interruption whose expires_at has passed:
-//   - default_action pause: closed with status 'expired' without approving
-//     anything (the worker resumes when re-engaged);
-//   - deny: closed with status 'expired' (treated as a refusal);
-//   - escalate: NEVER closed silently - priority is bumped to urgent and an
-//     event notifies the raising agent; the interruption stays open.
+// presented interruption whose expires_at has passed. Expiry can only
+// escalate: priority is bumped to urgent and an event notifies the raising
+// agent; the interruption is NEVER closed, answered, or decided on the
+// user's behalf — it waits until he answers. expires_at is cleared after
+// the one-time bump so the sweep does not re-escalate forever.
 //
 // It returns the ids it touched, in id order. now is an RFC3339 UTC instant
 // compared lexically against the stored expires_at.
 func (d *DB) ExpireLapsedInterruptions(ctx context.Context, nowRFC3339 string) ([]string, error) {
 	rows, err := d.QueryContext(ctx,
-		`SELECT id, default_action FROM interruptions
-		 WHERE expires_at != '' AND expires_at <= ? AND status IN ('open','presented')`, nowRFC3339)
+		`SELECT id FROM interruptions
+	 WHERE expires_at != '' AND expires_at <= ? AND status IN ('open','presented')`, nowRFC3339)
 	if err != nil {
 		return nil, fmt.Errorf("store: list lapsed interruptions: %w", err)
 	}
 	defer rows.Close()
 	type lapsed struct {
-		id     string
-		action string
+		id string
 	}
 	var due []lapsed
 	for rows.Next() {
 		var l lapsed
-		if err := rows.Scan(&l.id, &l.action); err != nil {
+		if err := rows.Scan(&l.id); err != nil {
 			return nil, err
 		}
 		due = append(due, l)
@@ -559,42 +558,19 @@ func (d *DB) ExpireLapsedInterruptions(ctx context.Context, nowRFC3339 string) (
 	}
 	var touched []string
 	for _, l := range due {
-		var err error
-		switch l.action {
-		case domain.ExpiryPause, domain.ExpiryDeny:
-			err = d.WithTx(ctx, func(tx *sql.Tx) error {
-				// Close open questions too: the gate is closed, not answered
-				// (no auto-approval is ever recorded).
-				if _, err := tx.Exec(`UPDATE questions SET status = 'skipped', updated_at = ? WHERE interruption_id = ? AND status NOT IN ('answered','skipped')`, now(), l.id); err != nil {
-					return err
-				}
-				if _, err := tx.Exec(`UPDATE interruptions SET status = 'expired', answered_at = ?, updated_at = ? WHERE id = ? AND status IN ('open','presented')`, now(), now(), l.id); err != nil {
-					return err
-				}
-				var raisedBy string
-				if err := tx.QueryRowContext(ctx, `SELECT COALESCE(raised_by_agent_id, '') FROM interruptions WHERE id = ?`, l.id).Scan(&raisedBy); err != nil {
-					return err
-				}
-				payload := fmt.Sprintf(`{"kind":"interruption_expired","interruption_id":%q,"action":%q}`, l.id, l.action)
-				_, err := AppendEventTx(tx, Event{AgentID: raisedBy, Type: "note", Payload: payload})
+		// Escalate-urgency-only: bump priority once, notify, keep waiting.
+		err := d.WithTx(ctx, func(tx *sql.Tx) error {
+			if _, err := tx.Exec(`UPDATE interruptions SET priority = 'urgent', expires_at = '', updated_at = ? WHERE id = ? AND status IN ('open','presented')`, now(), l.id); err != nil {
 				return err
-			})
-		case domain.ExpiryEscalate:
-			err = d.WithTx(ctx, func(tx *sql.Tx) error {
-				// Prevent repeated escalation on every sweep: only bump the
-				// first time the interruption lapses past its expiry.
-				if _, err := tx.Exec(`UPDATE interruptions SET priority = 'urgent', expires_at = '', updated_at = ? WHERE id = ? AND status IN ('open','presented')`, now(), l.id); err != nil {
-					return err
-				}
-				var raisedBy string
-				if err := tx.QueryRowContext(ctx, `SELECT COALESCE(raised_by_agent_id, '') FROM interruptions WHERE id = ?`, l.id).Scan(&raisedBy); err != nil {
-					return err
-				}
-				payload := fmt.Sprintf(`{"kind":"interruption_escalated","interruption_id":%q}`, l.id)
-				_, err := AppendEventTx(tx, Event{AgentID: raisedBy, Type: "note", Payload: payload})
+			}
+			var raisedBy string
+			if err := tx.QueryRowContext(ctx, `SELECT COALESCE(raised_by_agent_id, '') FROM interruptions WHERE id = ?`, l.id).Scan(&raisedBy); err != nil {
 				return err
-			})
-		}
+			}
+			payload := fmt.Sprintf(`{"kind":"interruption_escalated","interruption_id":%q}`, l.id)
+			_, err := AppendEventTx(tx, Event{AgentID: raisedBy, Type: "note", Payload: payload})
+			return err
+		})
 		if err != nil {
 			return touched, fmt.Errorf("store: expire interruption %s: %w", l.id, err)
 		}

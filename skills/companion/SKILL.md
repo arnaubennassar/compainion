@@ -151,6 +151,16 @@ steer new scope. Always record it:
 `capi POST /agents/$ID/events '{"type":"steer","payload":{"text":"continue","reason":"unblocked, not polling"}}'`
 Delivery/steering mechanics are in `harnesses/hermes.md` (`resume`).
 
+**Decision policy** — silence never decides for the user:
+- Anything the companion or harness can safely decide (continuation gates,
+  safe commands, choices already within the approved scope) is resolved
+  directly and must NOT generate an interruption.
+- Anything that genuinely needs the user's attention becomes an
+  interruption and waits indefinitely until he answers. Interruptions have
+  no auto-close: `expires_at` is metadata only, and expiry can only bump
+  priority to urgent and notify — never skip, deny, or answer a question
+  on his behalf.
+
 **Surfacing findings**: each loop turn and each `events` wake check `capi GET "/findings?status=new"`.
 At a natural break (between interruptions), batch them into ONE interruption:
 `capi POST /interruptions '{"topic":"findings","kind":"finding","priority":"low","digest":"N new findings from workers","blocking":false,"questions":[{"position":1,"text":"What should we do with these findings?","answer_type":"choice","suggestions":[{"label":"Open issues","rationale":"...","recommended":true},{"label":"Add a step"},{"label":"Ignore"}]}]}'`

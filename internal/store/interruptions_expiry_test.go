@@ -26,83 +26,36 @@ func mkInterruption(t *testing.T, d *DB, topic, kind, action, expiresAt string) 
 func futureRFC3339() string { return time.Now().UTC().Add(time.Hour).Format(time.RFC3339) }
 func pastRFC3339() string   { return time.Now().UTC().Add(-time.Hour).Format(time.RFC3339) }
 
-func TestDefaultExpiryActionAndValidation(t *testing.T) {
+func TestDefaultExpiryActionIsEscalateOnly(t *testing.T) {
 	d, _ := mustOpen(t)
 	ctx := context.Background()
-	// Worker approval gates default to pause: never auto-approve.
-	it := mkInterruption(t, d, "gate", "approval", "", "")
-	if it.DefaultAction != "pause" {
-		t.Fatalf("approval default_action = %q, want pause", it.DefaultAction)
+	// Every user-facing interruption defaults to escalate: expiry can only
+	// raise urgency, never close or decide the interruption.
+	for _, kind := range []string{"decision", "approval", "clarification"} {
+		it := mkInterruption(t, d, "t-"+kind, kind, "", "")
+		if it.DefaultAction != "escalate" {
+			t.Fatalf("kind %s default_action = %q, want escalate", kind, it.DefaultAction)
+		}
 	}
-	// User-facing kinds default to escalate and persist.
-	it = mkInterruption(t, d, "blocked", "decision", "", "")
-	if it.DefaultAction != "escalate" {
-		t.Fatalf("decision default_action = %q, want escalate", it.DefaultAction)
-	}
-	// Explicit actions are honored; invalid ones rejected.
-	if it := mkInterruption(t, d, "x", "approval", "deny", ""); it.DefaultAction != "deny" {
-		t.Fatalf("explicit default_action = %q, want deny", it.DefaultAction)
-	}
+	// Any other default_action is rejected: there is no auto-close.
 	if _, err := d.CreateInterruption(ctx, Interruption{
-		Topic: "bad", Kind: "approval", DefaultAction: "approve",
+		Topic: "bad", Kind: "decision", DefaultAction: "pause",
 		Questions: []Question{{Text: "?", AnswerType: "confirm", Suggestions: []Suggestion{{Label: "Yes"}}}},
 	}); err == nil {
-		t.Fatal("invalid default_action accepted, want error")
+		t.Fatal("pause default_action accepted, want error")
+	}
+	if _, err := d.CreateInterruption(ctx, Interruption{
+		Topic: "bad", Kind: "decision", DefaultAction: "deny",
+		Questions: []Question{{Text: "?", AnswerType: "confirm", Suggestions: []Suggestion{{Label: "Yes"}}}},
+	}); err == nil {
+		t.Fatal("deny default_action accepted, want error")
 	}
 	// expires_at must be RFC3339.
 	if _, err := d.CreateInterruption(ctx, Interruption{
-		Topic: "bad", Kind: "approval", ExpiresAt: "tomorrow",
+		Topic: "bad", Kind: "decision", ExpiresAt: "tomorrow",
 		Questions: []Question{{Text: "?", AnswerType: "confirm", Suggestions: []Suggestion{{Label: "Yes"}}}},
 	}); err == nil {
 		t.Fatal("non-RFC3339 expires_at accepted, want error")
-	}
-}
-
-func TestExpireLapsedInterruptionsPauseClosesWithoutApproving(t *testing.T) {
-	d, _ := mustOpen(t)
-	ctx := context.Background()
-	it := mkInterruption(t, d, "gate", "approval", "pause", pastRFC3339())
-	alive := mkInterruption(t, d, "gate2", "approval", "pause", futureRFC3339())
-
-	touched, err := d.ExpireLapsedInterruptions(ctx, now())
-	if err != nil {
-		t.Fatalf("ExpireLapsedInterruptions: %v", err)
-	}
-	if len(touched) != 1 || touched[0] != it.ID {
-		t.Fatalf("touched = %v, want [%s]", touched, it.ID)
-	}
-	out, err := d.GetInterruption(ctx, it.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if out.Status != "expired" {
-		t.Fatalf("status = %q, want expired", out.Status)
-	}
-	// Questions are skipped (closed), never answered by an auto-approval.
-	for _, q := range out.Questions {
-		if q.Status != "skipped" {
-			t.Fatalf("question status = %q, want skipped", q.Status)
-		}
-		for _, a := range q.Answers {
-			t.Fatalf("expired pause gate must not record answers, got %#v", a)
-		}
-	}
-	aliveOut, _ := d.GetInterruption(ctx, alive.ID)
-	if aliveOut.Status != "open" {
-		t.Fatalf("future expiry interrupted early: status = %q", aliveOut.Status)
-	}
-}
-
-func TestExpireLapsedInterruptionsDenyCloses(t *testing.T) {
-	d, _ := mustOpen(t)
-	ctx := context.Background()
-	it := mkInterruption(t, d, "gate", "approval", "deny", pastRFC3339())
-	if _, err := d.ExpireLapsedInterruptions(ctx, now()); err != nil {
-		t.Fatal(err)
-	}
-	out, _ := d.GetInterruption(ctx, it.ID)
-	if out.Status != "expired" {
-		t.Fatalf("status = %q, want expired", out.Status)
 	}
 }
 
@@ -110,8 +63,13 @@ func TestExpireLapsedInterruptionsEscalateKeepsOpen(t *testing.T) {
 	d, _ := mustOpen(t)
 	ctx := context.Background()
 	it := mkInterruption(t, d, "blocked", "decision", "escalate", pastRFC3339())
-	if _, err := d.ExpireLapsedInterruptions(ctx, now()); err != nil {
-		t.Fatal(err)
+	alive := mkInterruption(t, d, "gate2", "approval", "escalate", futureRFC3339())
+	touched, err := d.ExpireLapsedInterruptions(ctx, now())
+	if err != nil {
+		t.Fatalf("ExpireLapsedInterruptions: %v", err)
+	}
+	if len(touched) != 1 || touched[0] != it.ID {
+		t.Fatalf("touched = %v, want [%s]", touched, it.ID)
 	}
 	out, _ := d.GetInterruption(ctx, it.ID)
 	if out.Status != "open" {
@@ -120,8 +78,22 @@ func TestExpireLapsedInterruptionsEscalateKeepsOpen(t *testing.T) {
 	if out.Priority != "urgent" {
 		t.Fatalf("priority = %q, want urgent", out.Priority)
 	}
+	// Questions stay open and unanswered: no decision was made on the user's
+	// behalf.
+	for _, q := range out.Questions {
+		if q.Status != "open" {
+			t.Fatalf("question status = %q, want open", q.Status)
+		}
+		for _, a := range q.Answers {
+			t.Fatalf("expired interruption must not record answers, got %#v", a)
+		}
+	}
+	aliveOut, _ := d.GetInterruption(ctx, alive.ID)
+	if aliveOut.Status != "open" || aliveOut.Priority != "normal" {
+		t.Fatalf("future expiry interrupted early: status = %q priority = %q", aliveOut.Status, aliveOut.Priority)
+	}
 	// expires_at cleared so the sweep does not re-escalate forever.
-	touched, err := d.ExpireLapsedInterruptions(ctx, now())
+	touched, err = d.ExpireLapsedInterruptions(ctx, now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,10 +102,10 @@ func TestExpireLapsedInterruptionsEscalateKeepsOpen(t *testing.T) {
 	}
 }
 
-func TestExpireLapsedInterruptionsEmitsNotifyingEvents(t *testing.T) {
+func TestExpireLapsedInterruptionsEmitsNotifyingEvent(t *testing.T) {
 	d, _ := mustOpen(t)
 	ctx := context.Background()
-	it := mkInterruption(t, d, "gate", "approval", "pause", pastRFC3339())
+	it := mkInterruption(t, d, "blocked", "decision", "escalate", pastRFC3339())
 	if _, err := d.ExpireLapsedInterruptions(ctx, now()); err != nil {
 		t.Fatal(err)
 	}
@@ -143,12 +115,12 @@ func TestExpireLapsedInterruptionsEmitsNotifyingEvents(t *testing.T) {
 	}
 	found := false
 	for _, ev := range evs {
-		if contains(ev.Payload, `"kind":"interruption_expired"`) && contains(ev.Payload, it.ID) {
+		if contains(ev.Payload, `"kind":"interruption_escalated"`) && contains(ev.Payload, it.ID) {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatal("expected an interruption_expired note event for the raising agent")
+		t.Fatal("expected an interruption_escalated note event for the raising agent")
 	}
 }
 
