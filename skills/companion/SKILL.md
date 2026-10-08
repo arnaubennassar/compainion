@@ -226,3 +226,4 @@ capi GET /events?since=$EVENT_ID&limit=100
 #   scripts/hermes/runs.sh resume <session_id> <text|@file>   # reuses spawn role
 #   scripts/hermes/runs.sh output <run_id>
 ```
+Body files for capi @file calls: use a UNIQUE per-task/call filename (e.g. `body-$TASK_ID-$NNN.json` in the scratch dir), written immediately before the call - NEVER a shared generic name like `body.json`: concurrent workers reuse the same scratch dir, and a refused write made capi silently send another task's stale body (wrong outcome digest + duplicate interruption, 2026-10-08). capi refuses a @file body that is missing, whose mtime predates the capi process start, or that is reused unmodified within CAPI_BODY_REUSE_WINDOW seconds (default 120) with exit 23 - on refusal, rewrite the file fresh with a new mtime or a new unique name; never retry the same unmodified file.

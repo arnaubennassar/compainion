@@ -56,6 +56,19 @@ scope conflict):
 3. `capi PATCH /agents/$AGENT_ID '{"status":"waiting"}'` and stop. The companion
    resolves it and resumes you. Do not spawn workers; do not guess.
 
+## capi body files (staleness guard)
+
+Write API bodies to a file and pass its path to capi as an @file body - NEVER compose
+JSON inline in bash. Body files MUST be unique per task and per call, e.g.
+`body-$TASK_ID-$NNN.json` in the scratch dir, and written immediately before
+the call. NEVER reuse a generic name like `body.json`: concurrent workers share
+the scratch dir, and a refused write once made capi silently send another
+task's stale body (wrong outcome digest + duplicate interruption). capi
+refuses (exit 23) a @file body that is missing, whose mtime predates the capi
+process start, or that is reused unmodified within CAPI_BODY_REUSE_WINDOW
+seconds (default 120). On a 23 refusal, rewrite the body file fresh with a new
+mtime (or a new unique name) - never retry the same unmodified file.
+
 ## Findings
 
 Anything wrong you notice that is not your task is reported, not fixed:
