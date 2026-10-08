@@ -180,7 +180,21 @@ holds an in_progress step/task, raise a `decision` interruption with suggestions
 respawn-and-retry (recommended) / mark failed / cancel, and act on the answer
 (respawn = spawn a new run with the same payload and `session_id`).
 
-## Context hygiene
+## Framework vs personal
+
+This repo is a REUSABLE framework. Push generic improvements here (skills, scripts, daemon behavior, docs). Keep personal/task-specific content OUT: concrete repos (e.g. zkevm-bridge-service), user-specific paths, session state, and live task data belong in the companion profile (~/.hermes) or the target repo. ABSOLUTE RULE for anything committed here: NO machine-specific content - no /home/<user>/ paths (use $COMPANION_HOME, $HOME or ~), no usernames, no personal emails in file content (git author email for framework commits: companion@localhost). Grep for these before pushing. When recording lessons in these skills, phrase them generically - another operator should be able to reuse them as-is.
+
+## Execution model (DECIDED 2026-10-06)
+
+Spawn workers DIRECTLY via `delegate_task` - do NOT dispatch through the Hermes Runs API (`scripts/hermes/runs.sh`). Rationale: decisions/interruptions are frequent while daemon restarts/context clears are occasional; the detached round-trip (event -> wake -> reconcile -> answer -> resume) made every decision slow and fragile, and approval gates hit detached runs hardest. Direct spawning gives native approvals and inline questions.
+
+companiond REMAINS the source of truth for tracking: workstreams, tasks, plans/steps, events, findings, interruptions. Companion still: creates tasks/claims there, records steer/progress/finished events, surfaces findings as interruptions. delegate_task children cannot ask the user or spawn - put the full task description, scope (read/write/forbidden), non-goals and reporting instructions (which capi events to emit) in the prompt. A worker killed by a context clear or daemon restart is recovered by re-spawning from companiond task state (replay, not live resume) - build a richer backup/restore mechanism only when actually needed.
+
+Legacy note: `scripts/hermes/runs.sh` + `harnesses/hermes.md` describe the OLD detached flow; runs already in flight via it are allowed to finish, but no new dispatches.
+
+Writing API bodies: NEVER compose JSON inline in bash (nested quotes/braces break silently and have caused wasted spawns). Write the body with Python `json.dump` to a file and pass its path as an @file argument to capi's POST. Body files MUST be unique per task/call (e.g. `body-$TASK_ID-$NNN.json` in the scratch dir) and written immediately before the call - NEVER a shared generic name like `body.json`: concurrent workers reuse the same scratch dir, and a refused write made capi silently send another task's stale body (wrong outcome digest + duplicate interruption, 2026-10-08). capi now refuses a @file body whose mtime predates the process start or that is reused unmodified within CAPI_BODY_REUSE_WINDOW seconds (exit 23) - on refusal, rewrite the file fresh rather than retrying it as-is.
+
+Direct-spawn mechanics (delegate_task): 1) register the worker's agent id in companiond BEFORE the child claims its task (`capi POST /agents '{"id":"companion-direct-worker",...}'`), else the claim 400s; 2) progress event type is `progress` (NOT `task_progress`); 3) always verify the PR diff yourself against the task scope before reporting completion.
 
 Your context can be cleared at any time. Everything durable is in the API: plans,
 steps, tasks, interruptions, findings, events. After closing an interruption you
