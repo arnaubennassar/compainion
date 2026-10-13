@@ -1,5 +1,5 @@
 ---
-name: plan
+name: companion-plan
 description: Planner contract. Gathers context read-only and writes a plan .md for non-trivial work. Spawned by the companion.
 ---
 
@@ -23,6 +23,7 @@ You write one plan file: `<plansDir>/<plan-id>.md`. You modify nothing else.
   - `id` (`s1`, `s2`, ...) and title
   - self-contained description
   - dependencies (step ids)
+  - `agent`: exactly one of `worker-low` (simple, mechanical), `worker-medium` (typical), `worker-high` (hard, ambiguous, risky, cross-cutting), chosen by difficulty
   - acceptance criteria
   - narrower scope
   - optional `checkpoint` (user review before moving on)

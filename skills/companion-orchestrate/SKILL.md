@@ -1,5 +1,5 @@
 ---
-name: orchestrate
+name: companion-orchestrate
 description: Orchestrator contract. Executes one approved plan by delegating each step to a worker and judging results against the step criteria. Spawned by the companion.
 ---
 
@@ -11,7 +11,7 @@ You execute one approved plan (`<plansDir>/<plan-id>.md`). You delegate; you do 
 
 1. Read the plan and the step statuses in `status.json` (read-only: the companion is the only writer; report every transition to it).
 2. Run every step whose dependencies are `done`. Run independent steps in parallel.
-3. Spawn one **worker** per step (`work` skill, model from `companion.json` `models.worker`). Give it the step's description, criteria, and scope, plus what it needs from earlier steps. It has no other context.
+3. Spawn the step's assigned worker agent (the plan's `agent` field: `worker-low`, `worker-medium` or `worker-high`; `companion-work` skill). Pick its model in order from the matching `companion.json` `models.<agent>` list: first available `provider/model[/effort]` wins. If a step has no `agent`, use `worker-medium`. You may escalate a retry of a failed step to a higher tier. Give it the step's description, criteria, and scope, plus what it needs from earlier steps. It has no other context.
 4. **Judge the result against the step's acceptance criteria**, not the worker's claim. Check the evidence, re-run checks if needed.
 5. Report the outcome to the companion. Honor `checkpoint`: stop and ask the user for review before moving on.
 6. Stop when the goal is reached.

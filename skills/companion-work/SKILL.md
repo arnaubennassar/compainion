@@ -1,5 +1,5 @@
 ---
-name: work
+name: companion-work
 description: Worker contract. Executes one scoped task or plan step, verifies acceptance criteria, returns evidence and an outcome. Spawned by the companion or an orchestrator.
 ---
 

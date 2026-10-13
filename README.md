@@ -15,6 +15,7 @@ A single point of contact for all your workstreams. The companion keeps the huma
 - **Digesting:** short, standalone context in the user's preferred tone and language.
 - **Suggesting:** every ask carries at least one suggestion. The user can accept, accept with a comment, answer freely, or ask for details. The companion may push back on inconsistent answers.
 - **Steering:** answers obvious stalls (`yes`, `continue`) on its own and logs it. Anything involving a decision, scope, cost or destructive action goes to the user.
+- **Learning:** when the user states a style preference in passing ("summarize in under 200 words"), the companion answers, then asks whether to make it permanent. Only on a yes does it update `companionPreferences` in `companion.json`.
 - **Surfacing:** agents report issues found off the main path (bugs, noisy logs, misleading docs). The companion presents them at natural breaks with options: open an issue, add a step to the plan, ignore.
 
 ## Agents
@@ -24,11 +25,13 @@ A single point of contact for all your workstreams. The companion keeps the huma
 | companion | user | talk to the user, dispatch, track status |
 | planner | companion | write a plan `.md` for non-trivial work |
 | orchestrator | companion | execute one approved plan, delegating steps to workers |
-| worker | companion or orchestrator | execute one scoped task or step |
+| worker-low | companion or orchestrator | execute one simple, mechanical task or step |
+| worker-medium | companion or orchestrator | execute one typical task or step |
+| worker-high | companion or orchestrator | execute one hard task or step (ambiguous, risky, cross-cutting) |
 
 Dispatch:
 
-- Small, well scoped request: **worker** directly.
+- Small, well scoped request: a **worker** directly, tier chosen by the companion (`worker-low`, `worker-medium` or `worker-high`) by difficulty.
 - Several steps, unclear scope, or multiple areas: **planner**, user approves the plan, then one **orchestrator** per plan.
 - Workers never spawn agents. Orchestrators never edit the goal without user approval.
 
@@ -41,10 +44,12 @@ Single local config at the repo root, gitignored. Copy `companion.example.json` 
 ```json
 {
   "models": {
-    "companion": "claude-opus-5-5",
-    "planner": "claude-opus-5-5",
-    "orchestrator": "claude-sonnet-5-5",
-    "worker": "claude-sonnet-5-5"
+    "companion": ["anthropic/claude-opus-5-5/high", "openrouter/anthropic/claude-opus-5-5/high"],
+    "planner": ["anthropic/claude-opus-5-5/high", "openrouter/anthropic/claude-opus-5-5/high"],
+    "orchestrator": ["anthropic/claude-sonnet-5-5/medium", "openrouter/anthropic/claude-sonnet-5-5/medium"],
+    "worker-low": ["anthropic/claude-haiku-5-5", "openrouter/anthropic/claude-haiku-5-5"],
+    "worker-medium": ["anthropic/claude-sonnet-5-5/medium", "openrouter/anthropic/claude-sonnet-5-5/medium"],
+    "worker-high": ["anthropic/claude-opus-5-5/high", "openrouter/anthropic/claude-opus-5-5/high"]
   },
   "plansDir": "plans/",
   "companionPreferences": {
@@ -56,7 +61,7 @@ Single local config at the repo root, gitignored. Copy `companion.example.json` 
 }
 ```
 
-- `models`: model used per agent type. Every spawn reads it.
+- `models`: per agent type, an ordered list of `provider/model[/effort]` entries. The model id may itself contain slashes (e.g. `openrouter/anthropic/claude-sonnet-5-5`); effort is optional and is the last segment only when it is one of `low`, `medium`, `high`, `xhigh`, `max` (e.g. `openai/sol/medium`). Without an effort, the harness default applies. The harness tries them in order and uses the first one whose provider is configured and available; if a spawn fails because the provider or model is unavailable, it moves to the next entry. Every spawn reads it.
 - `plansDir`: where plans and status live.
 - `companionPreferences`: free-form guidance on how the companion talks to the user. The companion reads it at the start of every interaction.
 
@@ -68,7 +73,7 @@ Written by the planner, executed by the orchestrator. Sections:
 - **Goals:** including expected output.
 - **Acceptance criteria:** preferably executable checks (tests, commands), added to CI when relevant.
 - **Scope / non-goals:** what may be read, written, or is off limits.
-- **Steps:** each with id, title, self-contained description, dependencies, acceptance criteria, narrower scope, and optional `checkpoint` (user review before moving on). Steps must fit a single worker context and form a DAG ending in the goal. The last step before the goal verifies the plan acceptance criteria end to end.
+- **Steps:** each with id, title, self-contained description, dependencies, acceptance criteria, narrower scope, and the assigned worker agent (`worker-low`, `worker-medium` or `worker-high`, chosen by difficulty), and optional `checkpoint` (user review before moving on). Steps must fit a single worker context and form a DAG ending in the goal. The last step before the goal verifies the plan acceptance criteria end to end.
 
 ### Status: `<plansDir>/status.json`
 
@@ -108,12 +113,14 @@ Plans and status are local working state and are never committed to git unless t
 
 ## Skills
 
-All thin, all inside the repo (`skills/`, exposed to Claude Code via the `.claude/skills` symlink). The user only ever invokes `/companion`.
+All thin, all inside the repo (`skills/`, exposed to Claude Code via the `.claude/skills` symlink). The user only ever invokes `/companion-start`.
 
-- **`/companion`:** loads `companion.json`, reads `status.json`, then loops: present the next pending ask, collect the answer, record it, steer the blocked agent, repeat. Dispatches new requests per the rules above and batches findings into asks.
-- **`plan`:** planner contract. Read-only context gathering, questions returned to the companion when answers change the plan's shape, writes the `.md`, never modifies anything else.
-- **`orchestrate`:** orchestrator contract. Runs steps whose dependencies are done (independent ones in parallel), spawns a worker per step, judges results against the step criteria rather than the worker's claim, adds or rewrites unstarted steps on failure, and reports findings instead of silently fixing them. Started steps are never edited.
-- **`work`:** worker contract. Stay in scope, verify acceptance criteria, return evidence and an outcome (`success`, `failed` with reason, `interrupted`). Out-of-scope needs become findings or questions, never silent expansion.
+Names are `companion-<role>`: lowercase letters and hyphens only, matching the directory name, so they are valid in Claude Code, OpenCode, Hermes and Codex (OpenCode forbids `:`), and they don't clash with built-in commands like `plan`.
+
+- **`companion-start`:** loads `companion.json`, reads `status.json`, then loops: present the next pending ask, collect the answer, record it, steer the blocked agent, repeat. Dispatches new requests per the rules above and batches findings into asks.
+- **`companion-plan`:** planner contract. Read-only context gathering, questions returned to the companion when answers change the plan's shape, writes the `.md`, never modifies anything else.
+- **`companion-orchestrate`:** orchestrator contract. Runs steps whose dependencies are done (independent ones in parallel), spawns the step's assigned worker agent, judges results against the step criteria rather than the worker's claim, adds or rewrites unstarted steps on failure, and reports findings instead of silently fixing them. Started steps are never edited.
+- **`companion-work`:** worker contract, shared by all three worker tiers. Stay in scope, verify acceptance criteria, return evidence and an outcome (`success`, `failed` with reason, `interrupted`). Out-of-scope needs become findings or questions, never silent expansion.
 
 ## Harnesses
 
