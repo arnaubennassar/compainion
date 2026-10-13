@@ -1,73 +1,128 @@
 # CompAInion
 
-A Go REST backend (`companiond`) plus a set of Hermes skills so a Hermes
-"companion" profile can dispatch plans/tasks to detached Hermes workers and
-serve the user one interruption at a time over Telegram.
+A single point of contact for all your workstreams. The companion keeps the human focused by asking one thing at a time, digesting context, suggesting answers, and surfacing issues, while all real work is delegated to agents.
 
-- Backend: stdlib `net/http` + SQLite (`modernc.org/sqlite`), OpenAPI-documented.
-- Companion: Hermes profile `companion` chatting with you on Telegram; its
-  state lives entirely in the API, so context resets are safe.
-- Workers/orchestrators: headless Hermes runs via the gateway Runs API.
+## Principles
 
-## Quick start
+- **One session, no backend.** Every agent is spawned from the companion's session. State lives in plain files in the repo, nothing runs besides the harness.
+- **Companion never works.** It talks to the user and dispatches. Even "how is task X going?" is answered by a spawned worker that reads the files.
+- **Files are the source of truth.** Plans are `.md`, status is `.json`. Anything needed later must be on disk, so the companion context can be cleared at any time.
+- **Thin skills.** Each skill is a short contract; behavior comes from the files they read, not from long prompts.
 
-```bash
-# 1. Build and run the backend (localhost only, no auth)
-make build && ./bin/companiond          # or: go run ./cmd/companiond
+## What the companion does
 
-# 2. One-time user setup (secrets are user-only, never agent-written):
-#    hermes profile create companion
-#    hermes -p companion gateway setup    # Telegram token + API server key
+- **Sequencing:** one ask at a time, related asks batched to limit context switching.
+- **Digesting:** short, standalone context in the user's preferred tone and language.
+- **Suggesting:** every ask carries at least one suggestion. The user can accept, accept with a comment, answer freely, or ask for details. The companion may push back on inconsistent answers.
+- **Steering:** answers obvious stalls (`yes`, `continue`) on its own and logs it. Anything involving a decision, scope, cost or destructive action goes to the user.
+- **Surfacing:** agents report issues found off the main path (bugs, noisy logs, misleading docs). The companion presents them at natural breaks with options: open an issue, add a step to the plan, ignore.
 
-# 3. Wire the gateway: skills dirs on BOTH the companion and default profile
-#    (idempotent; --dry-run previews every command)
-scripts/hermes/install.sh
+## Agents
 
-# 4. Start the companion gateway, open the Telegram chat and say 'start'
-hermes -p companion gateway run
+| agent | spawned by | job |
+|---|---|---|
+| companion | user | talk to the user, dispatch, track status |
+| planner | companion | write a plan `.md` for non-trivial work |
+| orchestrator | companion | execute one approved plan, delegating steps to workers |
+| worker | companion or orchestrator | execute one scoped task or step |
+
+Dispatch:
+
+- Small, well scoped request: **worker** directly.
+- Several steps, unclear scope, or multiple areas: **planner**, user approves the plan, then one **orchestrator** per plan.
+- Workers never spawn agents. Orchestrators never edit the goal without user approval.
+
+## Files
+
+### `companion.json`
+
+Single local config at the repo root, gitignored. Copy `companion.example.json` to `companion.json` to start.
+
+```json
+{
+  "models": {
+    "companion": "claude-opus-5-5",
+    "planner": "claude-opus-5-5",
+    "orchestrator": "claude-sonnet-5-5",
+    "worker": "claude-sonnet-5-5"
+  },
+  "plansDir": "plans/",
+  "companionPreferences": {
+    "tone": "concise, friendly",
+    "language": "en",
+    "askStyle": "one question at a time, always with a recommended option",
+    "autoSteer": true
+  }
+}
 ```
 
-The companion is session-driven: no webhooks. It presents one interruption at
-a time (`GET /interruptions/next`), your reply is reconciled against
-`GET /interruptions?status=presented`, and when the queue is clear it blocks in
-`scripts/companion-wait --max 240` (override with `COMPANION_WAIT_MAX`) until
-an interruption or wake-worthy event arrives. Requires the repo skills dir
-registered on both profiles (`install.sh` does that). To clean up a
-previously installed webhook wake-up path: `scripts/hermes/install.sh --uninstall-wake`.
+- `models`: model used per agent type. Every spawn reads it.
+- `plansDir`: where plans and status live.
+- `companionPreferences`: free-form guidance on how the companion talks to the user. The companion reads it at the start of every interaction.
 
-Worker lifecycle (spawn / status / resume / output) goes through
-`scripts/hermes/runs.sh`; workers run on the companion profile with per-role
-models (`worker` = openrouter/z-ai-glm-5.3-flash, `planner` = anthropic
-claude-opus-5-5, `orchestrator` = anthropic claude-sonnet-5-5; the role is
-inferred from the skills list). See `skills/companion/harnesses/hermes.md` for
-the full harness contract (registration order, waiting/lost semantics, approval
-gate, Telegram presentation rules, limitations).
+### Plans: `<plansDir>/<plan-id>.md`
 
-## Layout
+Written by the planner, executed by the orchestrator. Sections:
 
+- **Summary:** what, why, how.
+- **Goals:** including expected output.
+- **Acceptance criteria:** preferably executable checks (tests, commands), added to CI when relevant.
+- **Scope / non-goals:** what may be read, written, or is off limits.
+- **Steps:** each with id, title, self-contained description, dependencies, acceptance criteria, narrower scope, and optional `checkpoint` (user review before moving on). Steps must fit a single worker context and form a DAG ending in the goal. The last step before the goal verifies the plan acceptance criteria end to end.
+
+### Status: `<plansDir>/status.json`
+
+Owned by the companion, the only writer. Agents report outcomes to the companion, which records them.
+
+```json
+{
+  "tasks": {
+    "T-014": {
+      "title": "Bump linter in repo X",
+      "kind": "worker",
+      "status": "done",
+      "plan": null,
+      "updated": "2026-10-13T10:02:00Z"
+    },
+    "T-015": {
+      "title": "Feature Y across A and B",
+      "kind": "plan",
+      "status": "running",
+      "plan": "feature-y.md",
+      "steps": { "s1": "done", "s2": "in_progress", "s3": "pending" },
+      "updated": "2026-10-13T10:40:00Z"
+    }
+  },
+  "pending": [
+    { "id": "Q-3", "task": "T-015", "kind": "decision", "digest": "...", "options": ["..."] }
+  ],
+  "findings": [
+    { "id": "F-2", "task": "T-015", "title": "10k warnings/min in service A", "status": "new" }
+  ]
+}
 ```
-api/openapi.yaml            REST contract (embedded, served at GET /openapi.yaml)
-cmd/companiond/             daemon entry point
-internal/domain|store|api|events|notify|ids|config|testutil
-skills/companion/           companion skill + harness doc (harnesses/hermes.md)
-skills/create-plan|execute-plan|execute-task/   worker skills
-scripts/capi                curl+jq REST client used by all skills
-scripts/companion-wait      blocking idle wait (prints {"wake":...} JSON)
-scripts/test-companion-wait.sh  black-box tests (throwaway daemon on :7791)
-scripts/hermes/runs.sh      gateway Runs API helper (spawn/status/resume/output;
-                            companion profile: /p/companion)
-scripts/hermes/install.sh   gateway wiring (idempotent, --dry-run)
-scripts/check-skills.sh     validates skill docs against openapi.yaml
-docs/hermes-gateway-spike.md  verified gateway behaviour (signatures, profiles, ports)
-```
 
-## Security notes
+Task status: `pending`, `planning`, `awaiting_approval`, `running`, `blocked`, `done`, `failed`, `cancelled`. Step status: `pending`, `in_progress`, `done`, `failed`, `blocked`.
 
-- `companiond` has **no authentication** and binds `127.0.0.1:7777` by default;
-  it refuses non-loopback binds unless `COMPANIOND_ALLOW_NON_LOOPBACK=1`.
-  Never expose it beyond localhost.
-- Secrets (Telegram bot token, `API_SERVER_KEY`, webhook HMAC secrets) live
-  only in `~/.hermes/.env`, `~/.hermes/profiles/companion/.env` and
-  `~/.hermes/webhook_subscriptions.json`. Never commit, log or echo them.
-- The Hermes webhook platform should listen on `127.0.0.1`
-  (`hermes config set platforms.webhook.host 127.0.0.1`).
+Plans and status are local working state and are never committed to git unless the user explicitly asks (`plans/` is in `.gitignore`).
+
+## Skills
+
+All thin, all inside the repo (`skills/`, exposed to Claude Code via the `.claude/skills` symlink). The user only ever invokes `/companion`.
+
+- **`/companion`:** loads `companion.json`, reads `status.json`, then loops: present the next pending ask, collect the answer, record it, steer the blocked agent, repeat. Dispatches new requests per the rules above and batches findings into asks.
+- **`plan`:** planner contract. Read-only context gathering, questions returned to the companion when answers change the plan's shape, writes the `.md`, never modifies anything else.
+- **`orchestrate`:** orchestrator contract. Runs steps whose dependencies are done (independent ones in parallel), spawns a worker per step, judges results against the step criteria rather than the worker's claim, adds or rewrites unstarted steps on failure, and reports findings instead of silently fixing them. Started steps are never edited.
+- **`work`:** worker contract. Stay in scope, verify acceptance criteria, return evidence and an outcome (`success`, `failed` with reason, `interrupted`). Out-of-scope needs become findings or questions, never silent expansion.
+
+## Harnesses
+
+The design needs only a harness that can spawn sub-agents with a chosen model and read files. Should work with any harness.
+
+## Flows
+
+1. **Simple task:** user asks, companion spawns a worker, worker finishes with evidence, companion records `done` and summarizes in two lines.
+2. **Larger work:** companion spawns the planner, relays its questions one at a time, user approves the plan, companion spawns an orchestrator that runs steps through workers while the user is asked about other work.
+3. **Failed step:** orchestrator can't patch a done step, so it asks the user with two options, then adds a new step and rewires unstarted ones. Changing the goal needs explicit approval.
+4. **Off-path issue:** a worker reports noisy logs, the companion presents it at the next break, and the user picks issue, new step, or ignore.
+5. **Status question:** companion spawns a worker that reads `status.json` and the plan and returns a short digest.

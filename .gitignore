@@ -1,4 +1,5 @@
-bin/
-*.db
-*.db-wal
-*.db-shm
+# Companion working state: plans and status.json. Commit only if the user explicitly asks.
+plans/
+
+# Local config; copy companion.example.json to companion.json
+companion.json

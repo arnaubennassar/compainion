@@ -1,0 +1,15 @@
+{
+  "models": {
+    "companion": "claude-opus-5-5",
+    "planner": "claude-opus-5-5",
+    "orchestrator": "claude-sonnet-5-5",
+    "worker": "claude-sonnet-5-5"
+  },
+  "plansDir": "plans/",
+  "companionPreferences": {
+    "tone": "concise, friendly",
+    "language": "en",
+    "askStyle": "one question at a time, always with a recommended option",
+    "autoSteer": true
+  }
+}
