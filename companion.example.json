@@ -1,11 +1,11 @@
 {
   "models": {
-    "companion": ["anthropic/claude-opus-5-5/high", "openrouter/anthropic/claude-opus-5-5/high"],
-    "planner": ["anthropic/claude-opus-5-5/high", "openrouter/anthropic/claude-opus-5-5/high"],
-    "orchestrator": ["anthropic/claude-sonnet-5-5/medium", "openrouter/anthropic/claude-sonnet-5-5/medium"],
-    "worker-low": ["anthropic/claude-haiku-5-5", "openrouter/anthropic/claude-haiku-5-5"],
-    "worker-medium": ["anthropic/claude-sonnet-5-5/medium", "openrouter/anthropic/claude-sonnet-5-5/medium"],
-    "worker-high": ["anthropic/claude-opus-5-5/high", "openrouter/anthropic/claude-opus-5-5/high"]
+    "companion": ["openrouter/glm-flash", "anthropic/sonnet/medium", "openai/terra/medium"],
+    "planner": ["openrouter/opus/medium", "anthropic/opus/medium", "openai/sol/high"],
+    "orchestrator": ["openrouter/sonnet/medium", "anthropic/sonnet/medium", "openai/sol/medium"],
+    "worker-low": ["openrouter/glm-flash", "openrouter/deepseek-flash", "anthropic/sonnet/medium", "openai/terra/medium"],
+    "worker-medium": ["openrouter/glm-flash", "openrouter/deepseek-flash", "anthropic/sonnet/medium", "openai/terra/medium"],
+    "worker-high": ["openrouter/glm", "anthropic/opus/medium", "openai/sol/medium"]
   },
   "plansDir": "plans/",
   "companionPreferences": {
