@@ -1,0 +1,12 @@
+{
+  "models": {
+    "companion": ["openrouter/glm-flash", "anthropic/sonnet/medium"]
+  },
+  "plansDir": "plans/",
+  "companionPreferences": {
+    "tone": "concise, friendly",
+    "language": "en",
+    "askStyle": "one question at a time, always with a recommended option",
+    "autoSteer": true
+  }
+}

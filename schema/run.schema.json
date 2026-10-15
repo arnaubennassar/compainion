@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "companion/run.schema.json",
+  "title": "Companion run file (runs/<task-id>.json)",
+  "description": "Written by the orchestrator. Absent `version` => v0.",
+  "type": "object",
+  "required": ["task", "steps", "findings"],
+  "properties": {
+    "version": { "type": "integer", "minimum": 1 },
+    "task": { "type": "string", "pattern": "^T-[0-9]+$" },
+    "steps": {
+      "type": "object",
+      "additionalProperties": { "type": "string", "pattern": "^ses_" }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["title"],
+        "properties": {
+          "step": { "type": "string" },
+          "agent": {
+            "enum": ["planner", "orchestrator", "worker-low", "worker-medium", "worker-high", "companion"]
+          },
+          "session": { "type": "string" },
+          "title": { "type": "string" },
+          "where": { "type": "string" },
+          "why": { "type": "string" },
+          "detail": { "type": "string" },
+          "options": {
+            "oneOf": [
+              { "type": "array", "items": { "type": "string" } },
+              { "type": "string" }
+            ]
+          },
+          "severity": { "enum": ["severe", "minor"] }
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": true
+}

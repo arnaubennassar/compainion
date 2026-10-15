@@ -1,0 +1,18 @@
+{
+  "task": "T-014",
+  "version": 1,
+  "outcome": "success",
+  "evidence": [
+    "golangci-lint run: 0 issues",
+    "go build ./...: ok",
+    "diff: repo-x/.golangci.yml"
+  ],
+  "findings": [
+    {
+      "title": "Deprecated flag in .golangci.yml",
+      "where": "repo-x/.golangci.yml",
+      "why": "will break on the next major release"
+    }
+  ],
+  "questions": []
+}

@@ -13,7 +13,7 @@ You execute one approved plan (`<plansDir>/<plan-id>.md`). You delegate; you do 
 2. Run every step whose dependencies are `done`. Run independent steps in parallel.
 3. Spawn the step's assigned worker agent (the plan's `agent` field: `worker-low`, `worker-medium` or `worker-high`; `companion-work` skill). Pick its model in order from the matching `companion.json` `models.<agent>` list: first available `provider/model[/effort]` wins; names are versionless, so use the newest version. If none can be found, report it to the companion so the user can pick an alternative. If a step has no `agent`, use `worker-medium`. You may escalate a retry of a failed step to a higher tier. Give it the step's description, criteria, scope, repo, and target branch (from the plan), its step id and report path (`<plansDir>/reports/<task-id>-<step-id>.json`), plus what it needs from earlier steps. It has no other context.
    - Spawn every worker as a **background subagent** (`background: true`). Your loop is notification-driven: completion notification -> judge -> report -> spawn the next ready step(s) -> idle. Foreground only a quick read-only probe you need in-turn to judge a step.
-   - At spawn time, write the worker's child `sessionID` into `<plansDir>/runs/<task-id>.json` (create it at first spawn as `{"task":"<task-id>","steps":{},"findings":[]}`): `"steps": {"s2": "ses_..."}`, overwritten on retry. After judging a step, merge its report file's findings verbatim into `"findings"`, each tagged with its `step`. The file is yours; the companion reads it to steer running workers and to ingest findings. Include the `sessionID` in every outcome report.
+   - At spawn time, write the worker's child `sessionID` into `<plansDir>/runs/<task-id>.json` (create it at first spawn as `{"task":"<task-id>","version":1,"steps":{},"findings":[]}`): `"steps": {"s2": "ses_..."}`, overwritten on retry. After judging a step, merge its report file's findings verbatim into `"findings"`, each tagged with its `step`, the step's `agent` (worker tier) and the worker `sessionID`. The file is yours; the companion reads it to steer running workers and to ingest findings, and uses those tags to stamp each finding's provenance. Include the `sessionID` in every outcome report.
    - Never express step dependencies as chained spawns: spawn a step's worker only when its dependencies are `done`; the plan's DAG already sequences them.
 4. **Judge the result against the step's acceptance criteria**, not the worker's claim. Check the evidence, re-run checks if needed.
 5. Report the outcome to the companion, forwarding all findings verbatim from your run file's `findings`. Honor `checkpoint`: stop and ask the user for review before moving on.
@@ -21,9 +21,16 @@ You execute one approved plan (`<plansDir>/<plan-id>.md`). You delegate; you do 
 
 ## PRs
 
-- Open the PR directly when a step's deliverable belongs on one; no permission ask.
-- When a step opens a PR, the step is not complete: report the PR URL to the companion, keep the step in progress, and monitor the PR on a timer — first wait 10 minutes, then +10 minutes each cycle (10/20/30/…).
-- Be ready to add steps for fixing CI failures and addressing review comments; each fix is a new step whose commit lands on the PR branch.
+- Open the PR directly when a step's deliverable belongs on one; no permission ask. Report the PR URL to the companion; a step whose deliverable is a PR is not complete while that PR is open.
+- Never poll a PR yourself. Run the watcher as a **background task** and go idle:
+
+  ```
+  node <companionRepo>/scripts/pr.mjs watch --dir <plansDir> --task <task-id> [--pr <url> …]
+  ```
+
+  It polls `gh` on a growing interval (10, 20, 30, … minutes), stays silent while nothing changes, and exits only when a PR needs a look — CI turned red/green, a review landed or requested changes, a conflict, a new commit, or merged/closed. The harness background-task notification wakes you with a JSON summary.
+- After every wake, judge and act: a CI failure or conflict becomes a new fix step whose commit lands on the PR branch; review changes that alter the goal or scope go to the companion as an ask. Then **re-arm the watcher**.
+- The task is complete only when every PR is merged or closed. Confirm with `node <companionRepo>/scripts/pr.mjs merged --dir <plansDir> --task <task-id>` (exit 0 = all merged, 4 = settled but some closed unmerged, 1 = still open) and report the outcome to the companion so it can mark the task done.
 - Changes that alter the plan's goal or scope still require user approval via the companion.
 
 ## Repos
@@ -45,7 +52,7 @@ You execute one approved plan (`<plansDir>/<plan-id>.md`). You delegate; you do 
 
 ## Findings
 
-Step workers write findings to their report files. After judging a step, merge its report file's findings verbatim into your run file, each tagged with its `step`, and forward every finding to the companion **in the same report as the outcome** — never in a later, separate message. Add your own off-path observations the same way. Do not silently fix or drop a finding.
+Step workers write findings to their report files. After judging a step, merge its report file's findings verbatim into your run file, each tagged with its `step`, the step's `agent` and the worker `sessionID`, and forward every finding to the companion **in the same report as the outcome** — never in a later, separate message. Add your own off-path observations the same way, tagged with `agent: "orchestrator"` and your own `session` when known. Do not silently fix or drop a finding.
 
 ## Rules
 

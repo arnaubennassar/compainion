@@ -1,0 +1,180 @@
+{
+  "version": 1,
+  "tasks": {
+    "T-014": {
+      "title": "Bump linter in repo X",
+      "kind": "worker",
+      "status": "done",
+      "plan": null,
+      "repo": "repo-x",
+      "branch": "companion/T-014",
+      "writes": [
+        "repo-x/.golangci.yml"
+      ],
+      "worktree": "plans/worktrees/T-014",
+      "prUrls": [
+        "https://github.com/repo-x/pull/1 (open, CI green)"
+      ],
+      "sessions": {
+        "worker": "ses_01J8Z3Q0W9K7V2N5P4R6T8Y1AB"
+      },
+      "updated": "2026-10-13T10:02:00Z"
+    },
+    "T-015": {
+      "title": "Feature Y across A and B",
+      "kind": "plan",
+      "status": "running",
+      "plan": "feature-y.md (rev 2)",
+      "issue": "repo-a/issues/55",
+      "repo": "repo-a",
+      "branch": "companion/T-015",
+      "writes": [
+        "repo-a/src/y/",
+        "repo-b/api/"
+      ],
+      "worktree": "plans/worktrees/T-015",
+      "prUrls": {
+        "repo-a": "https://github.com/repo-a/pull/12 (open)",
+        "repo-b": "https://github.com/repo-b/pull/34 (draft)"
+      },
+      "sessions": {
+        "planner": "ses_01J8Z4A1B2C3D4E5F6G7H8J9K0",
+        "orchestrator": "ses_01J8Z5B2C3D4E5F6G7H8J9K0L1"
+      },
+      "steps": {
+        "s1": "done",
+        "s2": {
+          "status": "in_progress",
+          "commit": "8442c80a (guardrail)",
+          "workerSession": "ses_01J8Z8E5F6G7H8J9K0L1M2N3P4",
+          "summary": "Wire POST /y to Y(), handler tests and validation",
+          "note": "Adding the endpoint; found log spam while wiring (see F-2)."
+        },
+        "s3": "pending",
+        "s4": {
+          "status": "pending",
+          "summary": "End-to-end verification of the plan acceptance criteria",
+          "note": "Runs last; depends on s2 and s3."
+        }
+      },
+      "updated": "2026-10-13T10:40:00Z"
+    },
+    "T-016": {
+      "title": "Migrate config loader",
+      "kind": "plan",
+      "status": "blocked",
+      "plan": "plans/config-loader.md",
+      "repo": "repo-a",
+      "branch": "companion/T-016",
+      "writes": [
+        "repo-a/src/config/"
+      ],
+      "worktree": "plans/worktrees/T-016",
+      "sessions": {
+        "planner": "ses_01J8Z6C3D4E5F6G7H8J9K0L1M2"
+      },
+      "steps": {
+        "s1": "blocked",
+        "s2": "pending"
+      },
+      "updated": "2026-10-13T09:15:00Z"
+    }
+  },
+  "pending": [
+    {
+      "id": "Q-3",
+      "task": "T-015",
+      "kind": "decision",
+      "digest": "Feature Y can reuse the existing cache layer or add a dedicated one. Reuse is faster but couples repo-a to internal cache details.",
+      "options": [
+        "Reuse the existing cache layer",
+        "Add a dedicated cache"
+      ],
+      "recommended": "Reuse"
+    },
+    {
+      "id": "Q-4",
+      "task": "T-015",
+      "kind": "finding",
+      "finding": "F-2",
+      "digest": "10k warnings/min in service A traced to a deprecated call; masks real errors.",
+      "options": [
+        "open an issue",
+        "add a step to the plan",
+        "ignore"
+      ]
+    },
+    {
+      "id": "Q-5",
+      "task": "T-016",
+      "kind": "decision",
+      "question": "The config loader has no test suite. Add tests first or migrate as-is?",
+      "options": [
+        "Add tests first (recommended)",
+        "Migrate as-is",
+        "Skip and revisit"
+      ],
+      "multiple": false
+    },
+    {
+      "id": "Q-6",
+      "task": "T-014",
+      "kind": "decision",
+      "digest": "Which linter version should we pin?",
+      "answer": "ANSWERED: pin the latest stable at merge time; already applied.",
+      "status": "answered",
+      "updated": "2026-10-13T10:05:00Z"
+    }
+  ],
+  "findings": [
+    {
+      "id": "F-1",
+      "task": "T-014",
+      "step": null,
+      "agent": "worker-low",
+      "session": "ses_01J8Z3Q0W9K7V2N5P4R6T8Y1AB",
+      "source": "reports/T-014.json",
+      "title": "Deprecated flag in .golangci.yml",
+      "evidence": "The deadcode linter flag is deprecated and will be removed in the next major release.",
+      "options": "amend the config / ignore",
+      "severity": "minor",
+      "status": "ignored"
+    },
+    {
+      "id": "F-2",
+      "task": "T-015",
+      "step": "s2",
+      "agent": "worker-medium",
+      "session": "ses_01J8Z8E5F6G7H8J9K0L1M2N3P4",
+      "source": "reports/T-015-s2.json",
+      "title": "10k warnings/min in service A",
+      "detail": "warn spam traced to a deprecated call; masks real errors",
+      "severity": "severe",
+      "status": "asked"
+    },
+    {
+      "id": "F-3",
+      "task": "T-015",
+      "step": "s1",
+      "agent": "worker-low",
+      "session": "ses_01J8Z7D4E5F6G7H8J9K0L1M2N3",
+      "source": "reports/T-015-s1.json",
+      "title": "Missing test for empty input",
+      "evidence": "the empty-input path is untested; a regression would pass CI",
+      "options": "add a step / open an issue / ignore",
+      "status": "noted (no action)"
+    },
+    {
+      "id": "F-4",
+      "task": "T-015",
+      "agent": "orchestrator",
+      "session": "ses_01J8Z5B2C3D4E5F6G7H8J9K0L1",
+      "source": "runs/T-015.json",
+      "title": "Orchestrator hit a harness limit while spawning workers",
+      "evidence": "orchestrator session stopped before s1 with no spawn tool available",
+      "options": "amend skills/companion-orchestrate / ignore",
+      "severity": "severe",
+      "status": "asked"
+    }
+  ]
+}

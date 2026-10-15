@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "companion/report.schema.json",
+  "title": "Companion report file (reports/<task-id>[-<step-id>].json)",
+  "description": "Written by a spawned agent (worker/planner). Covers both the worker shape (outcome/evidence) and the planner shape (plan/summary). Absent `version` => v0.",
+  "type": "object",
+  "properties": {
+    "version": { "type": "integer", "minimum": 1 },
+    "task": { "type": "string", "pattern": "^T-[0-9]+$" },
+    "step": { "type": "string", "pattern": "^s[0-9]+$" },
+    "outcome": { "enum": ["success", "pr-open", "failed", "interrupted"] },
+    "evidence": {
+      "description": "Commands/results. A string, a list, or a free-form object (real reports use an object).",
+      "type": ["array", "string", "object"]
+    },
+    "plan": { "type": "string" },
+    "summary": { "type": "string" },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["title"],
+        "properties": {
+          "agent": {
+            "enum": ["planner", "orchestrator", "worker-low", "worker-medium", "worker-high", "companion"]
+          },
+          "session": { "type": "string" },
+          "title": { "type": "string" },
+          "where": { "type": "string" },
+          "why": { "type": "string" },
+          "detail": { "type": "string" },
+          "options": {
+            "oneOf": [
+              { "type": "array", "items": { "type": "string" } },
+              { "type": "string" }
+            ]
+          },
+          "severity": { "enum": ["severe", "minor"] }
+        },
+        "additionalProperties": true
+      }
+    },
+    "questions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "question": { "type": "string" },
+          "options": {
+            "oneOf": [
+              { "type": "array", "items": { "type": "string" } },
+              { "type": "string" }
+            ]
+          },
+          "recommended": { "type": ["string", "number", "boolean"] }
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": true
+}

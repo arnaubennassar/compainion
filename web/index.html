@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Companion Status</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main>
+    <nav class="tabs" id="tabs" role="tablist" aria-label="Companion state"></nav>
+
+    <div id="banner" class="banner" hidden></div>
+
+    <section class="view" id="view-tasks" role="tabpanel" aria-label="Tasks">
+      <div id="stats" class="stats"></div>
+      <div id="tasks-col"></div>
+    </section>
+
+    <section class="view" id="view-asks" role="tabpanel" aria-label="Open questions" hidden>
+      <section class="panel" id="asks-panel"></section>
+    </section>
+
+    <section class="view" id="view-findings" role="tabpanel" aria-label="Findings" hidden>
+      <section class="panel" id="findings-panel"></section>
+    </section>
+
+    <details class="raw">
+      <summary>Raw state files</summary>
+      <div id="raw" class="raw-grid"></div>
+    </details>
+
+    <footer class="foot">
+      <div class="foot-line">
+        <span id="foot-sub">reading state files…</span>
+        <button class="linkish" id="btn-demo" type="button">Demo</button>
+      </div>
+      <div class="foot-note">
+        Companion never runs a backend: this page renders the files on disk.
+        Serve the repo root (see <code>web/serve.sh</code>) so the browser can read them.
+      </div>
+    </footer>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

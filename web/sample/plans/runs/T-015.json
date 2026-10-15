@@ -1,0 +1,18 @@
+{
+  "task": "T-015",
+  "version": 1,
+  "steps": {
+    "s1": "ses_01J8Z7D4E5F6G7H8J9K0L1M2N3",
+    "s2": "ses_01J8Z8E5F6G7H8J9K0L1M2N3P4"
+  },
+  "findings": [
+    {
+      "step": "s2",
+      "agent": "worker-medium",
+      "session": "ses_01J8Z8E5F6G7H8J9K0L1M2N3P4",
+      "title": "10k warnings/min in service A",
+      "where": "repo-a/src/y/log.go:42",
+      "why": "masks real errors and inflates log cost"
+    }
+  ]
+}

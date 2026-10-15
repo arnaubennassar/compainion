@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "companion/status.schema.json",
+  "title": "Companion status.json",
+  "description": "Durable companion state. A file without `version` is v0 (pre-versioning); current version is 1.",
+  "type": "object",
+  "required": ["version", "tasks", "pending", "findings"],
+  "properties": {
+    "version": { "type": "integer", "minimum": 1, "description": "State schema version. Absent => v0." },
+    "tasks": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/task" }
+    },
+    "pending": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/ask" }
+    },
+    "findings": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/finding" }
+    }
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "task": {
+      "type": "object",
+      "required": ["title", "status"],
+      "properties": {
+        "title": { "type": "string", "minLength": 1 },
+        "status": { "enum": ["pending", "planning", "awaiting_approval", "running", "blocked", "done", "failed", "cancelled"] },
+        "kind": { "enum": ["worker", "plan"] },
+        "plan": { "type": ["string", "null"] },
+        "issue": { "type": "string" },
+        "repo": { "type": "string" },
+        "branch": { "type": "string" },
+        "worktree": { "type": ["string", "null"] },
+        "workArea": { "type": "string" },
+        "accessBlocker": { "type": ["boolean", "string"] },
+        "writes": { "type": "array", "items": { "type": "string" } },
+        "sessions": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "pr": { "type": ["string", "null", "object", "array"] },
+        "prUrls": { "type": ["object", "array", "string"] },
+        "steps": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/step" }
+        },
+        "updated": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "step": {
+      "description": "A step value: either a bare status string or a status object.",
+      "oneOf": [
+        { "type": "string" },
+        { "$ref": "#/$defs/stepObject" }
+      ]
+    },
+    "stepObject": {
+      "type": "object",
+      "required": ["status"],
+      "properties": {
+        "status": { "type": "string", "minLength": 1 },
+        "commit": { "type": "string" },
+        "commits": { "type": "array", "items": { "type": "string" } },
+        "prUrl": { "type": "string" },
+        "summary": { "type": "string" },
+        "note": { "type": "string" },
+        "detail": { "type": "string" },
+        "workerSession": { "type": "string" },
+        "session": { "type": "string" },
+        "updated": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "ask": {
+      "type": "object",
+      "required": ["id", "kind"],
+      "anyOf": [{ "required": ["digest"] }, { "required": ["question"] }],
+      "properties": {
+        "id": { "type": "string", "pattern": "^Q-[0-9]+$" },
+        "kind": { "enum": ["decision", "finding"] },
+        "task": { "type": ["string", "null"] },
+        "finding": { "type": "string" },
+        "findings": { "type": "array", "items": { "type": "string" } },
+        "digest": { "type": "string" },
+        "question": { "type": "string" },
+        "options": {
+          "oneOf": [
+            { "type": "array", "items": { "type": "string" } },
+            { "type": "string" }
+          ]
+        },
+        "recommended": { "type": ["string", "number", "boolean"] },
+        "multiple": { "type": "boolean" },
+        "status": { "type": "string" },
+        "answer": { "type": "string" },
+        "updated": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "finding": {
+      "type": "object",
+      "required": ["id", "title"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^F-[0-9]+$" },
+        "title": { "type": "string", "minLength": 1 },
+        "task": { "type": ["string", "null"] },
+        "step": { "type": ["string", "null"] },
+        "agent": {
+          "enum": ["planner", "orchestrator", "worker-low", "worker-medium", "worker-high", "companion"]
+        },
+        "session": { "type": "string" },
+        "source": { "type": "string" },
+        "detail": { "type": "string" },
+        "evidence": { "type": "string" },
+        "where": { "type": "string" },
+        "options": {
+          "oneOf": [
+            { "type": "array", "items": { "type": "string" } },
+            { "type": "string" }
+          ]
+        },
+        "severity": { "enum": ["severe", "minor"] },
+        "status": { "type": "string" },
+        "updated": { "type": "string" }
+      },
+      "additionalProperties": true
+    }
+  }
+}

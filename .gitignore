@@ -1,5 +1,10 @@
-# Companion working state: plans and status.json. Commit only if the user explicitly asks.
-plans/
+# Companion working state (repo root only): the real plans/ dir and
+# companion.json. Commit only if the user explicitly asks.
+/plans/
+/companion.json
 
-# Local config; copy companion.example.json to companion.json
-companion.json
+# Local config: copy companion.example.json to companion.json.
+#
+# Note: web/sample/ is a demo fixture that mirrors the real layout with fake
+# data; since the rules above are root-anchored it stays tracked, so `?demo=1`
+# renders in a clean clone.

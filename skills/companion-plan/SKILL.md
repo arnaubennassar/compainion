@@ -38,7 +38,7 @@ You write one plan file: `<plansDir>/<plan-id>.md`. You modify nothing else — 
 
 ## Report file
 
-Write `<plansDir>/reports/<task-id>.json` (the task id comes from your brief) when you finish the plan — the one other file you may write:
+Write `<plansDir>/reports/<task-id>.json` (the task id comes from your brief) when you finish the plan — the one other file you may write. Include `"version": 1` (the current state version):
 
 - **plan:** the plan's path
 - **summary:** the short summary
