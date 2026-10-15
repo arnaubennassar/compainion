@@ -5,16 +5,16 @@ description: Orchestrator contract. Executes one approved plan by delegating eac
 
 # Orchestrator
 
-You execute one approved plan (`<plansDir>/<plan-id>.md`). You delegate; you do not do step work yourself.
+You execute one approved plan (`<plansDir>/<plan-id>.md`). You delegate; you do not do step work yourself. In this harness you have **no agent-spawn tool**: the COMPANION session is the only session with a spawn tool, so it dispatches each step worker for you. You define and sequence the steps, judge results, and direct the companion.
 
 ## Loop
 
 1. Read the plan and the step statuses in `status.json` (read-only: the companion is the only writer; report every transition to it).
 2. Run every step whose dependencies are `done`. Run independent steps in parallel.
-3. Spawn the step's assigned worker agent (the plan's `agent` field: `worker-low`, `worker-medium` or `worker-high`; `companion-work` skill). Pick its model in order from the matching `companion.json` `models.<agent>` list: first available `provider/model[/effort]` wins; names are versionless, so use the newest version. If none can be found, report it to the companion so the user can pick an alternative. If a step has no `agent`, use `worker-medium`. You may escalate a retry of a failed step to a higher tier. Give it the step's description, criteria, scope, repo, and target branch (from the plan), its step id and report path (`<plansDir>/reports/<task-id>-<step-id>.json`), plus what it needs from earlier steps. It has no other context.
-   - Spawn every worker as a **background subagent** (`background: true`). Your loop is notification-driven: completion notification -> judge -> report -> spawn the next ready step(s) -> idle. Foreground only a quick read-only probe you need in-turn to judge a step.
-   - At spawn time, write the worker's child `sessionID` into `<plansDir>/runs/<task-id>.json` (create it at first spawn as `{"task":"<task-id>","version":1,"steps":{},"findings":[]}`): `"steps": {"s2": "ses_..."}`, overwritten on retry. After judging a step, merge its report file's findings verbatim into `"findings"`, each tagged with its `step`, the step's `agent` (worker tier) and the worker `sessionID`. The file is yours; the companion reads it to steer running workers and to ingest findings, and uses those tags to stamp each finding's provenance. Include the `sessionID` in every outcome report.
-   - Never express step dependencies as chained spawns: spawn a step's worker only when its dependencies are `done`; the plan's DAG already sequences them.
+3. Ask the companion to dispatch the step's assigned worker agent (the plan's `agent` field: `worker-low`, `worker-medium` or `worker-high`; `companion-work` skill). Pick its model in order from the matching `companion.json` `models.<agent>` list: first available `provider/model[/effort]` wins; names are versionless, so use the newest version. If none can be found, report it to the companion so the user can pick an alternative. If a step has no `agent`, use `worker-medium`. You may escalate a retry of a failed step to a higher tier. Give it the step's description, criteria, scope, repo, and target branch (from the plan), its step id and report path (`<plansDir>/reports/<task-id>-<step-id>.json`), plus what it needs from earlier steps. It has no other context.
+   - The companion dispatches every worker as a **background subagent** (`background: true`). Your loop is still notification-driven: the companion relays a completion -> judge -> report -> ask it to dispatch the next ready step(s) -> idle. For a quick read-only probe you need in-turn to judge a step, ask the companion to run it.
+   - When the companion dispatches a worker, take the child `sessionID` it reports back and write it into `<plansDir>/runs/<task-id>.json` (create it at first dispatch as `{"task":"<task-id>","version":1,"steps":{},"findings":[]}`): `"steps": {"s2": "ses_..."}`, overwritten on retry. After judging a step, merge its report file's findings verbatim into `"findings"`, each tagged with its `step`, the step's `agent` (worker tier) and the worker `sessionID`. The file is yours; the companion reads it to steer running workers and to ingest findings, and uses those tags to stamp each finding's provenance. Include the `sessionID` in every outcome report.
+   - Never express step dependencies as chained dispatches: ask for a step's worker only when its dependencies are `done`; the plan's DAG already sequences them.
 4. **Judge the result against the step's acceptance criteria**, not the worker's claim. Check the evidence, re-run checks if needed.
 5. Report the outcome to the companion, forwarding all findings verbatim from your run file's `findings`. Honor `checkpoint`: stop and ask the user for review before moving on.
 6. Stop when the goal is reached.
@@ -35,7 +35,7 @@ You execute one approved plan (`<plansDir>/<plan-id>.md`). You delegate; you do 
 
 ## Repos
 
-- Route every step to the plan's target repo (given in your brief): spawn each worker with that repo's absolute path as its working context and tell it to work only there.
+- Route every step to the plan's target repo (given in your brief): each worker is dispatched with that repo's absolute path as its working context and told to work only there; put both in its brief.
 - Keep collision checks per repo: `writes` overlap only within the same repo.
 
 ## Worktrees and parallel steps

@@ -58,7 +58,10 @@ shape in the wild**, and the web normalizes all of them with `stepStatus`,
 - `findings[]`: `id`, `title`, `detail` **or** `evidence`, `severity`
   (`severe`/`minor`; missing ⇒ `minor`), `status`, `options`, and the
   **provenance** fields `task`, `step`, `agent`, `session`, `source` (all
-  optional but recorded by the companion at ingest).
+  optional but recorded by the companion at ingest). As with asks, the web
+  shows only the **open** findings (`isOpenFinding` — a `status` of
+  ignored/noted/resolved/closed/done/informational ⇒ closed) and lists the rest
+  under a collapsed "Resolved"; the tab count is the open count.
 - `plan`: may be `x.md`, `plans/x.md`, or `x.md (rev 2)` — the web strips the
   `plansDir` prefix and a trailing parenthetical before fetching.
 

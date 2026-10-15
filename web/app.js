@@ -523,12 +523,13 @@ function renderTabs() {
   const tasks = Object.keys(STATE.status.tasks).length;
   const open = STATE.status.pending.filter(isOpenAsk).length;
   const findings = STATE.status.findings.map(normalizeFinding);
-  const severe = findings.filter((f) => f.severity === 'severe' && f.open).length;
+  const openFindings = findings.filter((f) => f.open);
+  const severe = openFindings.filter((f) => f.severity === 'severe').length;
 
   const spec = [
     ['tasks', 'Tasks', tasks, ''],
     ['asks', 'Open questions', open, open ? 'waiting' : ''],
-    ['findings', 'Findings', findings.length, severe ? 'severe' : ''],
+    ['findings', 'Findings', openFindings.length, severe ? 'severe' : ''],
   ];
   const buttons = spec.map(([key, label, n, extra]) =>
     `<button class="tab ${key === activeTab ? 'active' : ''}" data-tab="${key}"
@@ -922,18 +923,33 @@ function recommendIndex(a) {
 
 function renderFindings() {
   const all = STATE.status.findings.map(normalizeFinding);
+  const open = all.filter((f) => f.open);
+  const resolved = all.filter((f) => !f.open);
+
+  const bySeverity = (a, b) => {
+    const s = (SEV_RANK[a.severity] ?? 9) - (SEV_RANK[b.severity] ?? 9);
+    return s || String(a.id).localeCompare(String(b.id), undefined, { numeric: true });
+  };
+
   if (!all.length) {
     $('#findings-panel').innerHTML =
       `<div class="panel-head"><h2>Findings</h2></div><div class="empty">No findings recorded.</div>`;
     return;
   }
-  const sorted = [...all].sort((a, b) => {
-    const s = (SEV_RANK[a.severity] ?? 9) - (SEV_RANK[b.severity] ?? 9);
-    return s || String(a.id).localeCompare(String(b.id), undefined, { numeric: true });
-  });
+
+  const openHtml = open.length
+    ? `<div class="cards-grid">${[...open].sort(bySeverity).map(findingCard).join('')}</div>`
+    : '<div class="empty">No open findings.</div>';
+
+  // resolved/ignored findings keep their history, like resolved asks
+  const resolvedBlock = resolved.length
+    ? `<details class="resolved"><summary>Resolved <span class="count-pill">${resolved.length}</span></summary>
+       <div class="cards-grid">${[...resolved].sort(bySeverity).map(findingCard).join('')}</div></details>`
+    : '';
+
   $('#findings-panel').innerHTML =
-    `<div class="panel-head"><h2>Findings</h2><span class="count-pill">${all.length}</span></div>
-     <div class="cards-grid">${sorted.map(findingCard).join('')}</div>`;
+    `<div class="panel-head"><h2>Findings</h2><span class="count-pill">${open.length}</span></div>
+     ${openHtml}${resolvedBlock}`;
 }
 
 function renderRaw() {

@@ -56,7 +56,7 @@ Whenever there is an interruption that needs the user's attention — every ask 
 bash scripts/telegram-notify.sh "<message>"
 ```
 
-The message is standalone and at most 20 words, stating what needs attention or a decision. It supplements the ask, never replaces it. Fire-and-forget: if the script fails, ignore it silently; never retry or report it.
+The message is standalone and at most 20 words, stating what needs attention or a decision. It supplements the ask, never replaces it. Fire-and-forget but not invisible: invoke the script and log its exit code (append a one-line note, e.g. `notify failed (exit N)`, to your session log or status note); never retry, and never block on delivery — a failed notification is non-blocking but must not be silent, since the ask itself is the primary channel.
 
 ## Dispatch
 
